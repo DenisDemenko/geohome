@@ -1,0 +1,130 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #F4EFEB;
+    color: #2F3944;
+  }
+}
+
+/* Soft 3D Tactile Neumorphic Utilities inspired by design reference */
+.tactile-card {
+  background: #FAF7F2;
+  box-shadow: 
+    8px 8px 22px rgba(185, 175, 160, 0.28),
+    -8px -8px 22px rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+.tactile-card-mint {
+  background: linear-gradient(135deg, #E6F2E8 0%, #D8EBDC 100%);
+  box-shadow: 
+    6px 6px 18px rgba(160, 185, 165, 0.3),
+    -6px -6px 18px rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+.tactile-card-peach {
+  background: linear-gradient(135deg, #FDF0E6 0%, #FAE4D4 100%);
+  box-shadow: 
+    6px 6px 18px rgba(210, 175, 155, 0.28),
+    -6px -6px 18px rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+.tactile-card-sky {
+  background: linear-gradient(135deg, #EBF3F8 0%, #DCEDF6 100%);
+  box-shadow: 
+    6px 6px 18px rgba(160, 185, 205, 0.28),
+    -6px -6px 18px rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+.tactile-inset {
+  background: #EEE9E1;
+  box-shadow: 
+    inset 3px 3px 6px rgba(180, 170, 155, 0.32),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.95);
+}
+
+.tactile-inset-subtle {
+  background: #F3EFE7;
+  box-shadow: 
+    inset 2px 2px 4px rgba(185, 175, 160, 0.2),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.85);
+}
+
+.tactile-btn {
+  background: #FAF7F2;
+  box-shadow: 
+    4px 4px 10px rgba(185, 175, 160, 0.3),
+    -4px -4px 10px rgba(255, 255, 255, 0.95),
+    inset 1px 1px 1px rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tactile-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 
+    5px 5px 12px rgba(185, 175, 160, 0.35),
+    -5px -5px 12px rgba(255, 255, 255, 1),
+    inset 1px 1px 1px rgba(255, 255, 255, 0.9);
+}
+
+.tactile-btn:active, .tactile-btn-pressed {
+  transform: translateY(1px);
+  box-shadow: 
+    inset 3px 3px 6px rgba(180, 170, 155, 0.35),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.9);
+  background: #EEE9E2;
+}
+
+.tactile-btn-mint {
+  background: linear-gradient(135deg, #B8D8C2 0%, #A3CBB0 100%);
+  color: #1A3E26;
+  box-shadow: 
+    4px 4px 12px rgba(135, 170, 145, 0.4),
+    -4px -4px 10px rgba(255, 255, 255, 0.8),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.6);
+}
+
+.tactile-btn-mint:active {
+  box-shadow: 
+    inset 3px 3px 6px rgba(110, 145, 120, 0.45),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.7);
+}
+
+.tactile-btn-peach {
+  background: linear-gradient(135deg, #F8CBB0 0%, #F5B694 100%);
+  color: #4A2411;
+  box-shadow: 
+    4px 4px 12px rgba(215, 160, 130, 0.4),
+    -4px -4px 10px rgba(255, 255, 255, 0.8),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.6);
+}
+
+.tactile-pill-active {
+  background: #FAF7F2;
+  box-shadow: 
+    3px 3px 8px rgba(185, 175, 160, 0.3),
+    -3px -3px 8px rgba(255, 255, 255, 0.95);
+}
+
+/* Custom smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F0ECE4;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb {
+  background: #D1C8BA;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B6AB9B;
+}

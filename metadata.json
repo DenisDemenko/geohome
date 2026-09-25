@@ -1,0 +1,6 @@
+{
+  "name": "КуполГео - Розрахунок та Конструктор Геодезичного Купола",
+  "description": "Професійний параметричний конструктор геодезичних куполів: точний розрахунок балок, розкрій конекторів та обшивки, 3D огляд, експорт у SVG, OBJ та STEP.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
