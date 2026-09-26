@@ -27,6 +27,7 @@ interface ConnectorCutPanelProps {
   onSelectNode: (id: NodeId) => void;
   connectorParams: ConnectorParams;
   onChangeConnectorParams: (params: ConnectorParams) => void;
+  onResetToProportional?: () => void;
 }
 
 export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
@@ -34,7 +35,8 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
   selectedNodeId,
   onSelectNode,
   connectorParams,
-  onChangeConnectorParams
+  onChangeConnectorParams,
+  onResetToProportional
 }) => {
   // Classify all unique connector bracket types in this dome
   const connectorTypes = useMemo(() => {
@@ -166,29 +168,41 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
 
       {/* Interactive Sizing Sliders [20 mm - 300 mm] */}
       <div className="p-4 rounded-3xl tactile-inset-subtle border border-white/80 bg-white/40">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
           <div className="flex items-center gap-2">
             <Sliders className="w-4 h-4 text-[#5B9279]" />
             <h3 className="text-xs font-bold text-[#1A2E3B] uppercase tracking-wider">
-              Параметри пластини (Регулювання 20 мм - 300 мм)
+              Параметри пластини ({model.parameters.diameter < 1000 ? "2 мм - 80 мм" : "20 мм - 300 мм"})
             </h3>
           </div>
-          <span className="text-[11px] font-mono font-bold text-[#5B9279] bg-white px-2 py-0.5 rounded-md border border-[#DCD6CA]">
-            Сердцевина: {connectorParams.hubDiameter} мм · Луч: {connectorParams.tabLength} мм
-          </span>
+          <div className="flex items-center gap-2">
+            {onResetToProportional && (
+              <button
+                type="button"
+                onClick={onResetToProportional}
+                className="text-xs font-bold text-[#2E7D32] bg-[#E1EDE3] hover:bg-[#d0e5d3] px-2.5 py-1 rounded-lg border border-[#A6C7AE] transition-all"
+                title="Скинути розміри конектора до ідеальної пропорції під розмір купола"
+              >
+                ⚡ Пропорційно куполу
+              </button>
+            )}
+            <span className="text-[11px] font-mono font-bold text-[#5B9279] bg-white px-2 py-0.5 rounded-md border border-[#DCD6CA]">
+              Сердцевина: {connectorParams.hubDiameter} мм · Луч: {connectorParams.tabLength} мм
+            </span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Core Diameter [20 - 300 mm] */}
+          {/* Core Diameter [2 - 300 mm] */}
           <div className="p-3 rounded-2xl bg-white/70 border border-[#E8E2D8]">
             <div className="flex items-center justify-between mb-1 text-xs">
               <span className="font-semibold text-[#5A6778]">Сердцевина (діаметр)</span>
               <div className="flex items-center gap-1">
                 <input
                   type="number"
-                  min={20}
-                  max={300}
-                  step={5}
+                  min={2}
+                  max={model.parameters.diameter < 1000 ? 80 : 300}
+                  step={connectorParams.hubDiameter < 20 ? 0.5 : 5}
                   value={connectorParams.hubDiameter}
                   onChange={e =>
                     onChangeConnectorParams({
@@ -203,9 +217,9 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
             </div>
             <input
               type="range"
-              min={20}
-              max={300}
-              step={5}
+              min={2}
+              max={model.parameters.diameter < 1000 ? 80 : 300}
+              step={connectorParams.hubDiameter < 20 ? 0.5 : 5}
               value={connectorParams.hubDiameter}
               onChange={e =>
                 onChangeConnectorParams({
@@ -216,22 +230,22 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
               className="w-full accent-[#5B9279] cursor-pointer"
             />
             <div className="flex justify-between text-[10px] text-[#8C9BAE] font-mono mt-1">
-              <span>20 мм</span>
-              <span>140 мм</span>
-              <span>300 мм</span>
+              <span>{model.parameters.diameter < 1000 ? "2 мм" : "20 мм"}</span>
+              <span>{connectorParams.hubDiameter} мм</span>
+              <span>{model.parameters.diameter < 1000 ? "80 мм" : "300 мм"}</span>
             </div>
           </div>
 
-          {/* Ray Length [20 - 300 mm] */}
+          {/* Ray Length [2 - 300 mm] */}
           <div className="p-3 rounded-2xl bg-white/70 border border-[#E8E2D8]">
             <div className="flex items-center justify-between mb-1 text-xs">
               <span className="font-semibold text-[#5A6778]">Довжина луча</span>
               <div className="flex items-center gap-1">
                 <input
                   type="number"
-                  min={20}
-                  max={300}
-                  step={5}
+                  min={2}
+                  max={model.parameters.diameter < 1000 ? 80 : 300}
+                  step={connectorParams.tabLength < 20 ? 0.5 : 5}
                   value={connectorParams.tabLength}
                   onChange={e =>
                     onChangeConnectorParams({
@@ -246,9 +260,9 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
             </div>
             <input
               type="range"
-              min={20}
-              max={300}
-              step={5}
+              min={2}
+              max={model.parameters.diameter < 1000 ? 80 : 300}
+              step={connectorParams.tabLength < 20 ? 0.5 : 5}
               value={connectorParams.tabLength}
               onChange={e =>
                 onChangeConnectorParams({
@@ -259,22 +273,22 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
               className="w-full accent-[#5B9279] cursor-pointer"
             />
             <div className="flex justify-between text-[10px] text-[#8C9BAE] font-mono mt-1">
-              <span>20 мм</span>
-              <span>95 мм</span>
-              <span>300 мм</span>
+              <span>{model.parameters.diameter < 1000 ? "2 мм" : "20 мм"}</span>
+              <span>{connectorParams.tabLength} мм</span>
+              <span>{model.parameters.diameter < 1000 ? "80 мм" : "300 мм"}</span>
             </div>
           </div>
 
-          {/* Ray Width [20 - 150 mm] */}
+          {/* Ray Width [1.5 - 150 mm] */}
           <div className="p-3 rounded-2xl bg-white/70 border border-[#E8E2D8]">
             <div className="flex items-center justify-between mb-1 text-xs">
               <span className="font-semibold text-[#5A6778]">Ширина луча</span>
               <div className="flex items-center gap-1">
                 <input
                   type="number"
-                  min={20}
-                  max={150}
-                  step={5}
+                  min={1.5}
+                  max={model.parameters.diameter < 1000 ? 40 : 150}
+                  step={connectorParams.tabWidth < 20 ? 0.5 : 5}
                   value={connectorParams.tabWidth}
                   onChange={e =>
                     onChangeConnectorParams({
@@ -289,9 +303,9 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
             </div>
             <input
               type="range"
-              min={20}
-              max={150}
-              step={5}
+              min={1.5}
+              max={model.parameters.diameter < 1000 ? 40 : 150}
+              step={connectorParams.tabWidth < 20 ? 0.5 : 5}
               value={connectorParams.tabWidth}
               onChange={e =>
                 onChangeConnectorParams({
@@ -302,9 +316,9 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
               className="w-full accent-[#5B9279] cursor-pointer"
             />
             <div className="flex justify-between text-[10px] text-[#8C9BAE] font-mono mt-1">
-              <span>20 мм</span>
-              <span>45 мм</span>
-              <span>150 мм</span>
+              <span>{model.parameters.diameter < 1000 ? "1.5 мм" : "20 мм"}</span>
+              <span>{connectorParams.tabWidth} мм</span>
+              <span>{model.parameters.diameter < 1000 ? "40 мм" : "150 мм"}</span>
             </div>
           </div>
 
@@ -323,6 +337,11 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
                   }
                   className="w-full py-1 px-1.5 text-xs font-mono font-bold rounded-lg bg-white border border-[#DCD6CA] text-[#1A2E3B]"
                 >
+                  <option value={0.5}>0.5 мм</option>
+                  <option value={0.8}>0.8 мм</option>
+                  <option value={1.0}>1.0 мм</option>
+                  <option value={1.5}>1.5 мм</option>
+                  <option value={2.0}>2.0 мм</option>
                   <option value={3.0}>3.0 мм</option>
                   <option value={4.0}>4.0 мм</option>
                   <option value={5.0}>5.0 мм</option>
@@ -343,6 +362,14 @@ export const ConnectorCutPanel: React.FC<ConnectorCutPanelProps> = ({
                   }
                   className="w-full py-1 px-1.5 text-xs font-mono font-bold rounded-lg bg-white border border-[#DCD6CA] text-[#1A2E3B]"
                 >
+                  <option value={1.2}>M1.2</option>
+                  <option value={1.6}>M1.6</option>
+                  <option value={2}>M2</option>
+                  <option value={2.5}>M2.5</option>
+                  <option value={3}>M3</option>
+                  <option value={4}>M4</option>
+                  <option value={5}>M5</option>
+                  <option value={6}>M6</option>
                   <option value={8}>M8</option>
                   <option value={10}>M10</option>
                   <option value={12}>M12</option>

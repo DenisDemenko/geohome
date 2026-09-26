@@ -70,6 +70,47 @@ export const DEFAULT_BEAM_PROFILES: BeamProfile[] = [
     density: 2700,
     elasticModulus: 70000,
     bendingStrength: 150
+  },
+  {
+    name: "Рейка 10 × 20 мм (Міні-купол / Теплиця / Модель)",
+    width: 10,
+    depth: 20,
+    type: "rectangular",
+    material: "pine",
+    density: 480,
+    elasticModulus: 10000,
+    bendingStrength: 20
+  },
+  {
+    name: "Рейка 4 × 8 мм (Настільний макет / Фанера)",
+    width: 4,
+    depth: 8,
+    type: "rectangular",
+    material: "pine",
+    density: 450,
+    elasticModulus: 9500,
+    bendingStrength: 18
+  },
+  {
+    name: "Мікро-рейка 2 × 4 мм (Дерев'яний макет / Бальза)",
+    width: 2,
+    depth: 4,
+    type: "rectangular",
+    material: "pine",
+    density: 300,
+    elasticModulus: 6000,
+    bendingStrength: 15
+  },
+  {
+    name: "Трубка Ø 3 × 0.5 мм (Латунь / Алюміній / Моделі)",
+    width: 3,
+    depth: 3,
+    wallThickness: 0.5,
+    type: "pipe",
+    material: "aluminum",
+    density: 2700,
+    elasticModulus: 70000,
+    bendingStrength: 150
   }
 ];
 
@@ -86,7 +127,8 @@ export interface BeamMiterAngles {
 
 export function calculateBeamMiterAngles(
   edge: Edge,
-  nodes: Node[]
+  nodes: Node[],
+  connectorParams?: { tabLength?: number; boltDistance?: number }
 ): BeamMiterAngles {
   const pA = nodes[edge.start].position;
   const pB = nodes[edge.end].position;
@@ -107,6 +149,10 @@ export function calculateBeamMiterAngles(
   // Approximate bevel angle (half dihedral angle between adjacent triangular facets)
   const bevelDeg = Math.round((miterDeg * 0.72) * 10) / 10;
 
+  const tabL = connectorParams?.tabLength || 95;
+  const boltHole1 = Math.max(1.0, Math.round(tabL * 0.35 * 10) / 10);
+  const boltHole2 = Math.max(2.0, Math.round(tabL * 0.75 * 10) / 10);
+
   return {
     edgeId: edge.id,
     type: edge.type,
@@ -114,8 +160,8 @@ export function calculateBeamMiterAngles(
     startMiterDeg: miterDeg,
     endMiterDeg: miterDeg,
     bevelDeg,
-    boltHole1Mm: 45,
-    boltHole2Mm: 95
+    boltHole1Mm: boltHole1,
+    boltHole2Mm: boltHole2
   };
 }
 

@@ -35,21 +35,22 @@ export function generateConnectorSVG(
   const boltHolesSvg = cut.boltHoles
     .map(
       h =>
-        `<circle cx="${(half + h.x).toFixed(2)}" cy="${(half + h.y).toFixed(2)}" r="${(h.diameter / 2).toFixed(2)}" fill="#FFFFFF" stroke="#DE7C5A" stroke-width="1.6" />`
+        `<circle cx="${(half + h.x).toFixed(2)}" cy="${(half + h.y).toFixed(2)}" r="${(h.diameter / 2).toFixed(2)}" fill="#FFFFFF" stroke="#DE7C5A" stroke-width="${Math.max(0.2, Math.min(1.6, (h.diameter || 2) * 0.15)).toFixed(2)}" />`
     )
     .join("\n    ");
 
   const bendLinesSvg = cut.bendLines
     .map(
       l =>
-        `<line x1="${(half + l.x1).toFixed(2)}" y1="${(half + l.y1).toFixed(2)}" x2="${(half + l.x2).toFixed(2)}" y2="${(half + l.y2).toFixed(2)}" stroke="#5B82A6" stroke-width="1.8" stroke-dasharray="5,3" />`
+        `<line x1="${(half + l.x1).toFixed(2)}" y1="${(half + l.y1).toFixed(2)}" x2="${(half + l.x2).toFixed(2)}" y2="${(half + l.y2).toFixed(2)}" stroke="#5B82A6" stroke-width="${Math.max(0.2, Math.min(1.8, cut.outerRadius * 0.015)).toFixed(2)}" stroke-dasharray="5,3" />`
     )
     .join("\n    ");
 
+  const labelFontSize = Math.max(3.5, Math.min(11, cut.outerRadius * 0.08 + 2)).toFixed(1);
   const labelsSvg = cut.rayLabels
     .map(
       lbl =>
-        `<text x="${(half + lbl.x).toFixed(2)}" y="${(half + lbl.y).toFixed(2)}" font-family="sans-serif" font-size="11" font-weight="700" fill="#1A2E3B" text-anchor="middle" dominant-baseline="middle">${lbl.text}</text>`
+        `<text x="${(half + lbl.x).toFixed(2)}" y="${(half + lbl.y).toFixed(2)}" font-family="sans-serif" font-size="${labelFontSize}" font-weight="700" fill="#1A2E3B" text-anchor="middle" dominant-baseline="middle">${lbl.text}</text>`
     )
     .join("\n    ");
 
@@ -85,7 +86,7 @@ export function generateConnectorSVG(
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}mm" height="${size}mm">
   <style>
-    .cut-line { fill: #FAF7F2; stroke: #1A2E3B; stroke-width: 2.0; stroke-linejoin: round; stroke-linecap: round; }
+    .cut-line { fill: #FAF7F2; stroke: #1A2E3B; stroke-width: ${Math.max(0.3, Math.min(2.0, cut.outerRadius * 0.018)).toFixed(2)}; stroke-linejoin: round; stroke-linecap: round; }
     .center-mark { stroke: #E2E8F0; stroke-width: 0.8; stroke-dasharray: 6,4; }
   </style>
   <rect width="100%" height="100%" fill="#FFFFFF" />
@@ -383,7 +384,7 @@ export function generateBeamBlueprintsSVG(model: DomeModel): string {
       const xEnd = xStart + drawnLen;
       const hubDiam = model.connectorParams.hubDiameter || 140;
       const hubRadius = hubDiam / 2;
-      const netCut = g.cutLength || Math.max(10, Math.round(g.length - hubDiam));
+      const netCut = g.cutLength || Math.max(0.5, Math.round(g.length - hubDiam));
       const drawnHubOffset = (hubRadius / g.length) * drawnLen;
 
       // Miter offsets
@@ -474,7 +475,7 @@ export function generateSingleBeamBlueprintSVG(
   const hubDiam = model.connectorParams.hubDiameter || 140;
   const hubRadius = hubDiam / 2;
   const netCut =
-    group.cutLength || Math.max(10, Math.round(group.length - hubDiam));
+    group.cutLength || Math.max(0.5, Math.round(group.length - hubDiam));
 
   const svgW = 1000;
   const svgH = 680;

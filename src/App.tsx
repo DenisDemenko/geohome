@@ -3,6 +3,7 @@ import {
   DomeParameters,
   BeamProfile,
   ConnectorParams,
+  SheathingParams,
   NodeId,
   EdgeId,
   FaceId
@@ -10,7 +11,8 @@ import {
 import { generateDome } from "./core/dome";
 import { approveGeometry, revokeApproval } from "./core/approval";
 import { DEFAULT_BEAM_PROFILES } from "./core/beams";
-import { DEFAULT_CONNECTOR_PARAMS } from "./core/connectors";
+import { DEFAULT_CONNECTOR_PARAMS, getProportionalConnectorParams } from "./core/connectors";
+import { DEFAULT_SHEATHING_PARAMS, getRecommendedPlywoodThickness } from "./core/sheathing";
 import { exportDomeSpecificationPDF } from "./export/pdfExport";
 
 import { Viewer3D } from "./components/Viewer3D";
@@ -21,6 +23,7 @@ import { ConnectorCutPanel } from "./components/ConnectorCutPanel";
 import { SheathingNestingPanel } from "./components/SheathingNestingPanel";
 import { ExportPanel } from "./components/ExportPanel";
 import { InspectorPanel } from "./components/InspectorPanel";
+import { MobileARViewer } from "./components/MobileARViewer";
 
 import {
   Box,
@@ -39,6 +42,12 @@ import {
 } from "lucide-react";
 
 export default function App() {
+  // Mobile AR Quick Look route check (?ar=1)
+  const isARMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("ar") === "1";
+  if (isARMode) {
+    return <MobileARViewer />;
+  }
+
   // Navigation active tab
   const [activeTab, setActiveTab] = useState<
     "3d" | "beams" | "connectors" | "sheathing" | "export"
@@ -56,6 +65,11 @@ export default function App() {
 
   const [beamProfile, setBeamProfile] = useState<BeamProfile>(DEFAULT_BEAM_PROFILES[0]);
   const [connectorParams, setConnectorParams] = useState<ConnectorParams>(DEFAULT_CONNECTOR_PARAMS);
+  const [sheathingParams, setSheathingParams] = useState<SheathingParams>({
+    ...DEFAULT_SHEATHING_PARAMS,
+    thickness: getRecommendedPlywoodThickness(4000)
+  });
+  const [autoScaleConnectors, setAutoScaleConnectors] = useState<boolean>(true);
 
   // Approval state
   const [isApproved, setIsApproved] = useState(false);
@@ -66,15 +80,46 @@ export default function App() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<EdgeId | null>(null);
   const [selectedFaceId, setSelectedFaceId] = useState<FaceId | null>(null);
 
+  // Handle parameter changes with proportional connector scaling for ultra small domes
+  const handleParamsChange = (newParams: DomeParameters) => {
+    if (autoScaleConnectors && newParams.diameter !== params.diameter) {
+      const updatedConnector = getProportionalConnectorParams(newParams.diameter, connectorParams);
+      setConnectorParams(updatedConnector);
+
+      // Auto-adapt plywood thickness proportionally
+      const recThickness = getRecommendedPlywoodThickness(newParams.diameter);
+      setSheathingParams(prev => ({ ...prev, thickness: recThickness }));
+
+      // Auto-adapt beam profile when switching to miniature/model scale (< 1200 mm)
+      if (newParams.diameter < 1200 && beamProfile.width >= 35) {
+        const miniProfile = DEFAULT_BEAM_PROFILES.find(p => p.width <= 10) || DEFAULT_BEAM_PROFILES[0];
+        setBeamProfile(miniProfile);
+      } else if (newParams.diameter >= 3000 && beamProfile.width <= 12) {
+        const stdProfile = DEFAULT_BEAM_PROFILES.find(p => p.width === 50) || DEFAULT_BEAM_PROFILES[0];
+        setBeamProfile(stdProfile);
+      }
+    }
+    setParams(newParams);
+  };
+
+  const handleResetToProportional = () => {
+    const updated = getProportionalConnectorParams(params.diameter, connectorParams);
+    setConnectorParams(updated);
+    setSheathingParams(prev => ({
+      ...prev,
+      thickness: getRecommendedPlywoodThickness(params.diameter)
+    }));
+  };
+
   // Generate Master Dome Model
   const domeModel = useMemo(() => {
-    let model = generateDome(params, beamProfile, connectorParams);
+    let model = generateDome(params, beamProfile, connectorParams, sheathingParams);
     if (isApproved && lockedVersion) {
       model.approved = true;
       model.geometryVersion = lockedVersion;
     }
     return model;
-  }, [params, beamProfile, connectorParams, isApproved, lockedVersion]);
+  }, [params, beamProfile, connectorParams, sheathingParams, isApproved, lockedVersion]);
 
   // Handle Geometry Approval
   const handleApprove = () => {
@@ -255,7 +300,9 @@ export default function App() {
           <div className="p-3.5 rounded-2xl tactile-card">
             <span className="text-[11px] text-[#5A6778] block mb-0.5">Діаметр / Висота</span>
             <span className="text-sm font-mono font-bold text-[#1A2E3B]">
-              {(domeModel.parameters.diameter / 1000).toFixed(1)} м × {(domeModel.parameters.height / 1000).toFixed(1)} м
+              {(domeModel.parameters.diameter / 1000).toFixed(domeModel.parameters.diameter < 1000 ? 2 : 1)} м
+              {domeModel.parameters.diameter < 1000 ? ` (${(domeModel.parameters.diameter / 10).toFixed(0)} см)` : ""} ×{" "}
+              {(domeModel.parameters.height / 1000).toFixed(domeModel.parameters.height < 1000 ? 2 : 1)} м
             </span>
           </div>
 
@@ -309,6 +356,8 @@ export default function App() {
                 onSelectEdge={setSelectedEdgeId}
                 onSelectFace={setSelectedFaceId}
                 onChangeConnectorParams={setConnectorParams}
+                sheathingParams={sheathingParams}
+                onChangeSheathingParams={setSheathingParams}
               />
 
               {/* Real-time Inspector */}
@@ -331,7 +380,7 @@ export default function App() {
             <div className="lg:col-span-4 flex flex-col gap-5">
               <ParamControls
                 params={params}
-                onChangeParams={setParams}
+                onChangeParams={handleParamsChange}
                 beamProfile={beamProfile}
                 onChangeProfile={setBeamProfile}
                 connectorParams={connectorParams}
@@ -340,6 +389,9 @@ export default function App() {
                 geometryVersion={lockedVersion}
                 onApprove={handleApprove}
                 onRevoke={handleRevoke}
+                autoScaleConnectors={autoScaleConnectors}
+                onToggleAutoScaleConnectors={setAutoScaleConnectors}
+                onResetToProportional={handleResetToProportional}
               />
             </div>
           </div>
@@ -369,6 +421,7 @@ export default function App() {
             onSelectNode={setSelectedNodeId}
             connectorParams={connectorParams}
             onChangeConnectorParams={setConnectorParams}
+            onResetToProportional={handleResetToProportional}
           />
         )}
 

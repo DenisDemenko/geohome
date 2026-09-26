@@ -13,16 +13,84 @@ import { angleBetween, dot, normalize, sub, cross, length } from "./math";
 
 export const DEFAULT_CONNECTOR_PARAMS: ConnectorParams = {
   type: "star_plate",
-  hubDiameter: 140, // mm center core (20 - 300 mm)
-  tabLength: 95, // mm ray/tab length (20 - 300 mm)
-  tabWidth: 45, // mm ray/tab width (20 - 150 mm)
+  hubDiameter: 140, // mm center core (2 - 300 mm)
+  tabLength: 95, // mm ray/tab length (2 - 300 mm)
+  tabWidth: 45, // mm ray/tab width (1.5 - 150 mm)
   thickness: 4.0, // mm steel plate
   boltDiameter: 10, // M10
   boltDistance: 35, // mm
   boltHoleCount: 2,
   centerCutout: "lightning", // Thunder Domes style lightning bolt cutout
-  material: "steel_st3"
+  material: "steel_st3",
+  autoProportional: true
 };
+
+/**
+ * Scales connector bracket parameters proportionally for any dome diameter (150 mm up to 24000 mm).
+ * When dome diameter is in ultra-small regime (15 cm - 3 m), reduces hub diameter, tab length,
+ * tab width, plate thickness, bolt distance, and fastener diameter (e.g. M1.6, M2, M3, M4)
+ * to perfectly match miniature struts without interference.
+ */
+export function getProportionalConnectorParams(
+  diameterMm: number,
+  baseParams: ConnectorParams = DEFAULT_CONNECTOR_PARAMS
+): ConnectorParams {
+  const standardDiameter = 6000; // 6.0 m reference architectural scale
+  if (diameterMm >= standardDiameter) {
+    return { ...baseParams, autoProportional: true };
+  }
+
+  // Smooth ergonomic power scaling from 150 mm (15 cm) to 6000 mm
+  // At 150 mm: scale ≈ 0.045 (4.5% of full scale)
+  // At 500 mm: scale ≈ 0.13
+  // At 1500 mm: scale ≈ 0.35
+  // At 3000 mm: scale ≈ 0.62
+  // At 6000 mm: scale = 1.0
+  const t = Math.max(0, Math.min(1, (diameterMm - 150) / (standardDiameter - 150)));
+  const scale = 0.045 + 0.955 * Math.pow(t, 0.88);
+
+  const hubDiameter = Math.max(4, Math.round(baseParams.hubDiameter * scale * 10) / 10);
+  const tabLength = Math.max(3, Math.round(baseParams.tabLength * scale * 10) / 10);
+  const tabWidth = Math.max(2.5, Math.round(baseParams.tabWidth * scale * 10) / 10);
+  const boltDistance = Math.max(1.5, Math.round(baseParams.boltDistance * scale * 10) / 10);
+
+  // Thickness: scales from 0.8 mm (precision sheet / 3D print) to 4.0 mm
+  const thickness = Math.max(
+    0.6,
+    Math.round((0.8 + (baseParams.thickness - 0.8) * Math.pow(t, 0.65)) * 10) / 10
+  );
+
+  // Standard metric fastener selection based on scale
+  let boltDiameter: number;
+  if (diameterMm < 220) {
+    boltDiameter = 1.6; // M1.6 micro screws / pins
+  } else if (diameterMm < 450) {
+    boltDiameter = 2.0; // M2
+  } else if (diameterMm < 800) {
+    boltDiameter = 2.5; // M2.5
+  } else if (diameterMm < 1400) {
+    boltDiameter = 3.0; // M3
+  } else if (diameterMm < 2200) {
+    boltDiameter = 4.0; // M4
+  } else if (diameterMm < 3200) {
+    boltDiameter = 6.0; // M6
+  } else if (diameterMm < 4500) {
+    boltDiameter = 8.0; // M8
+  } else {
+    boltDiameter = baseParams.boltDiameter || 10;
+  }
+
+  return {
+    ...baseParams,
+    hubDiameter,
+    tabLength,
+    tabWidth,
+    thickness,
+    boltDiameter,
+    boltDistance,
+    autoProportional: true
+  };
+}
 
 export function calculateConnector(
   model: DomeModel,
@@ -294,9 +362,9 @@ export function generateConnectorCutPattern(
   connector: ConnectorGeometry,
   params: ConnectorParams = DEFAULT_CONNECTOR_PARAMS
 ): ConnectorCutGeometry {
-  const hubDiam = Math.max(20, Math.min(300, params.hubDiameter || 140));
-  const tabLen = Math.max(20, Math.min(300, params.tabLength || 90));
-  const tabW = Math.max(20, Math.min(150, params.tabWidth || 45));
+  const hubDiam = Math.max(2, Math.min(300, params.hubDiameter || 140));
+  const tabLen = Math.max(2, Math.min(300, params.tabLength || 90));
+  const tabW = Math.max(1.5, Math.min(150, params.tabWidth || 45));
 
   const hubRadius = hubDiam / 2;
   const rayCount = connector.beams.length;
@@ -311,7 +379,7 @@ export function generateConnectorCutPattern(
   const interRayAngles: ConnectorCutGeometry["interRayAngles"] = [];
 
   // Center lightning cutout
-  const lightningScale = Math.max(0.6, Math.min(2.5, hubRadius / 35));
+  const lightningScale = Math.max(0.04, Math.min(2.5, hubRadius / 35));
   const centerCutoutPath = `M ${3 * lightningScale} ${-16 * lightningScale} L ${-9 * lightningScale} ${2 * lightningScale} L ${0 * lightningScale} ${2 * lightningScale} L ${-4 * lightningScale} ${16 * lightningScale} L ${10 * lightningScale} ${-2 * lightningScale} L ${1 * lightningScale} ${-2 * lightningScale} Z`;
 
   const sortedBeams = connector.beams;
@@ -327,7 +395,7 @@ export function generateConnectorCutPattern(
     const perpY = cosA;
 
     // Bolt holes along ray
-    const holeCount = tabLen < 45 ? 1 : (params.boltHoleCount || 2);
+    const holeCount = tabLen < 15 ? 1 : (params.boltHoleCount || 2);
     if (holeCount === 1) {
       const hDist = hubRadius + tabLen * 0.55;
       boltHoles.push({
@@ -377,22 +445,24 @@ export function generateConnectorCutPattern(
       y2: sinA * hubRadius + perpY * tabHalfW
     });
 
-    // Label for ray
+    // Label for ray (distance adapts to tab length)
     const bendDeg = (beam as any).bendAngle || 8.0;
+    const labelOffset = Math.max(2, Math.min(18, tabLen * 0.25 + 2));
     rayLabels.push({
-      x: cosA * (totalRadius + 18),
-      y: sinA * (totalRadius + 18),
+      x: cosA * (totalRadius + labelOffset),
+      y: sinA * (totalRadius + labelOffset),
       text: `${beam.beamType} (${bendDeg}°)`,
       angleDeg: Math.round((beam as any).planarAngle || (i * 360) / rayCount),
       bendDeg
     });
 
     // Centerline from center past outer tip
+    const axisOffset = Math.max(2, Math.min(16, tabLen * 0.2 + 2));
     centerAxes.push({
       x1: 0,
       y1: 0,
-      x2: cosA * (totalRadius + 16),
-      y2: sinA * (totalRadius + 16),
+      x2: cosA * (totalRadius + axisOffset),
+      y2: sinA * (totalRadius + axisOffset),
       angleDeg: Math.round(((beam as any).planarAngle || (i * 360) / rayCount) * 10) / 10,
       rayIndex: i + 1
     });
@@ -408,7 +478,7 @@ export function generateConnectorCutPattern(
 
       // Only draw dimension arc if separation is reasonable
       if (deltaAngle > 5 && deltaAngle < 170) {
-        const rArc = hubRadius + Math.max(12, Math.min(42, tabLen * 0.45));
+        const rArc = hubRadius + Math.max(1.5, Math.min(42, tabLen * 0.45));
         const rad1 = (ang1 * Math.PI) / 180;
         const rad2 = (ang2 * Math.PI) / 180;
 
@@ -420,7 +490,7 @@ export function generateConnectorCutPattern(
         const arcPath = `M ${sx.toFixed(2)} ${sy.toFixed(2)} A ${rArc.toFixed(2)} ${rArc.toFixed(2)} 0 0 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`;
 
         const midAngleRad = ((ang1 + ang2) / 2) * (Math.PI / 180);
-        const rText = rArc + 13;
+        const rText = rArc + Math.max(2, Math.min(13, tabLen * 0.2 + 1.5));
         const textX = Math.cos(midAngleRad) * rText;
         const textY = Math.sin(midAngleRad) * rText;
 
@@ -469,7 +539,7 @@ export function generateConnectorCutPattern(
     if (!isBase && angNext <= angCur) angNext += 360;
     const midAngleRad = ((angCur + angNext) / 2) * (Math.PI / 180);
 
-    const valleyR = Math.max(15, hubRadius * 0.72);
+    const valleyR = Math.max(0.8, hubRadius * 0.72);
     const vX = Math.cos(midAngleRad) * valleyR;
     const vY = Math.sin(midAngleRad) * valleyR;
 
@@ -543,7 +613,7 @@ export function generateConnectorCutPattern(
   return {
     nodeId: connector.nodeId,
     beamCount: rayCount,
-    outerRadius: totalRadius + 28,
+    outerRadius: totalRadius + Math.max(4, Math.min(28, totalRadius * 0.25)),
     hubRadius,
     tabLength: tabLen,
     tabWidth: tabW,

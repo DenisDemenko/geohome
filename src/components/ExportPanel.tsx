@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { DomeModel, NodeId } from "../core/types";
 import { calculateConnector } from "../core/connectors";
 import { calculateSheetNesting } from "../core/sheathing";
@@ -13,6 +13,8 @@ import {
 import { exportDomeOBJ } from "../export/objExport";
 import { exportDomeSTEP } from "../export/stepExport";
 import { exportDomeSTL } from "../export/stlExport";
+import { downloadUSDZ } from "../export/usdzExport";
+import { ARModal } from "./ARModal";
 import {
   exportDomeSpecificationPDF,
   exportSheathingNestingPDF
@@ -28,7 +30,9 @@ import {
   Printer,
   Sparkles,
   Cpu,
-  BookOpen
+  BookOpen,
+  Smartphone,
+  QrCode
 } from "lucide-react";
 
 interface ExportPanelProps {
@@ -37,6 +41,7 @@ interface ExportPanelProps {
 }
 
 export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId }) => {
+  const [isARModalOpen, setIsARModalOpen] = useState(false);
   const activeNodeId = selectedNodeId !== null ? selectedNodeId : model.nodes[0]?.id || 0;
   const activeNode = model.nodes.find(n => n.id === activeNodeId) || model.nodes[0];
 
@@ -46,6 +51,15 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId 
     const connector = calculateConnector(model, activeNode.id);
     const svg = generateConnectorSVG(connector, model);
     downloadFile(`connector_node_${activeNode.id}.svg`, svg);
+  };
+
+  // 1b. Export USDZ for Apple AR
+  const handleExportUSDZ = () => {
+    downloadUSDZ(model, {
+      scale: "1:1",
+      style: "hybrid",
+      plywoodThickness: model.sheathingParams?.thickness || 12
+    });
   };
 
   // 2. Export Sheathing CNC SVG
@@ -101,18 +115,19 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId 
   // 8. Export CSV BOM
   const handleExportBOM = () => {
     const hubDiam = model.connectorParams.hubDiameter || 140;
-    const hubRad = hubDiam / 2;
+    const hubRad = Math.round((hubDiam / 2) * 10) / 10;
+    const boltLenMm = Math.max(6, Math.min(140, Math.round((model.beamProfile.width + model.connectorParams.thickness * 2 + 10) / 5) * 5));
     const lines = [
       "Тип елемента;Марка;Кількість (шт);До вузла сходження (мм);Обрізаний під конектор (мм);Відступ кільця конектора (мм);Матеріал;Примітка",
       ...model.beamGroups.map(g => {
-        const netCut = g.cutLength || Math.max(10, Math.round(g.length - hubDiam));
+        const netCut = g.cutLength || Math.max(0.5, Math.round(g.length - hubDiam));
         return `Балка каркаса;Тип ${g.type};${g.count};${g.length};${netCut};-${hubRad} мм з торця (Ø${hubDiam});${model.beamProfile.name};${g.isBaseBeam ? "Основа Z=0" : "Сфера"}`;
       }),
       ...model.faceGroups.map(
         f => `Панель обшивки;Грань ${f.type};${f.count};${f.lengths.join("x")};${f.lengths.join("x")};—;Фанера / OSB;${f.area} м2/шт`
       ),
       `Конектори;Сталеві зірочки Thunder Domes;${model.nodes.length};Ø${hubDiam};Ø${hubDiam};Маточина Ø${hubDiam}мм;Сталь ${model.connectorParams.thickness}мм;Лазерний розкрій`,
-      `Кріплення;Болти М${model.connectorParams.boltDiameter};${model.edges.length * 4};70;70;—;Оцинкована сталь DIN 933;З шайбами та гайками DIN 985`
+      `Кріплення;Болти / гвинти М${model.connectorParams.boltDiameter};${model.edges.length * 4};${boltLenMm};${boltLenMm};—;Оцинкована сталь DIN 933 / 7991;З шайбами та гайками DIN 985`
     ];
 
     const csvContent = "\uFEFF" + lines.join("\n");
@@ -310,9 +325,9 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId 
       {/* 3D Exports Grid (OBJ & STEP & STL) */}
       <div>
         <h3 className="text-xs font-bold tracking-wide text-[#5A6778] mb-3 uppercase">
-          3D Об'єкти для CAD та 3D Друк (OBJ / STEP / STL)
+          3D Об'єкти для CAD, AR та 3D Друк (STEP / OBJ / STL / USDZ)
         </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
           {/* STEP */}
           <div className="p-4 rounded-2xl tactile-card-mint border border-white/80 flex flex-col justify-between gap-3">
             <div>
@@ -378,6 +393,41 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId 
               Експорт STL (.stl)
             </button>
           </div>
+
+          {/* Apple AR Quick Look (USDZ) */}
+          <div className="p-4 rounded-2xl tactile-card border border-white/80 bg-gradient-to-b from-white to-[#FDEFE7]/50 flex flex-col justify-between gap-3 shadow-xs">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-mono font-bold text-[#DE7C5A]">Apple USDZ</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FDEFE7] text-[#DE7C5A]">
+                  AR / Камера
+                </span>
+              </div>
+              <h4 className="text-sm font-bold text-[#1A2E3B] flex items-center gap-1.5">
+                <Smartphone className="w-4 h-4 text-[#DE7C5A]" />
+                <span>Перегляд в AR (.usdz)</span>
+              </h4>
+              <p className="text-[11px] text-[#5A6778] mt-1">
+                Для iPhone, iPad та Android. Швидкий перегляд купола через камеру у просторі 1:1.
+              </p>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <button
+                onClick={() => setIsARModalOpen(true)}
+                className="w-full py-2 text-xs font-bold rounded-xl bg-gradient-to-r from-[#DE7C5A] to-[#C9603D] text-white hover:opacity-95 shadow-2xs text-center flex items-center justify-center gap-1.5 transition-all"
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span>QR-код для смартфона</span>
+              </button>
+              <button
+                onClick={handleExportUSDZ}
+                className="w-full py-1.5 text-[11px] font-semibold rounded-xl bg-white border border-[#DCD6CA] hover:bg-slate-50 text-[#5A6778] text-center flex items-center justify-center gap-1.5"
+              >
+                <Download className="w-3 h-3" />
+                <span>Завантажити USDZ</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -403,6 +453,14 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId 
           Завантажити CSV
         </button>
       </div>
+
+      {/* AR Modal */}
+      <ARModal
+        model={model}
+        plywoodThickness={model.sheathingParams?.thickness || 12}
+        isOpen={isARModalOpen}
+        onClose={() => setIsARModalOpen(false)}
+      />
     </div>
   );
 };

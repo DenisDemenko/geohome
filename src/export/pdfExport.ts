@@ -24,6 +24,7 @@ export function generateSpecificationHTML(model: DomeModel): string {
   const boltsCount = totalBeamsCount * 2 * (connectorParams.boltHoleCount || 2);
   const nutsCount = boltsCount;
   const washersCount = boltsCount * 2;
+  const boltLenMm = Math.max(6, Math.min(140, Math.round((beamProfile.width + connectorParams.thickness * 2 + 10) / 5) * 5));
 
   // Sheathing
   const nesting = calculateSheetNesting(model);
@@ -322,7 +323,7 @@ export function generateSpecificationHTML(model: DomeModel): string {
         <tbody>
           ${model.beamGroups
             .map(g => {
-              const netCut = g.cutLength || Math.max(10, Math.round(g.length - connectorParams.hubDiameter));
+              const netCut = g.cutLength || Math.max(0.5, Math.round(g.length - connectorParams.hubDiameter));
               const linearM = Math.round(((netCut * g.count) / 1000) * 10) / 10;
               const volM3 = Math.round((linearM * (beamProfile.width / 1000) * (beamProfile.depth / 1000)) * 100) / 100;
               const weightKg = Math.round(volM3 * beamProfile.density);
@@ -332,7 +333,7 @@ export function generateSpecificationHTML(model: DomeModel): string {
                 <td><b>Балка ${g.type}</b>${g.isBaseBeam ? " (Основа)" : ""}</td>
                 <td class="text-center font-mono font-bold">${g.count} шт</td>
                 <td class="text-right font-mono" style="color: #4A5568; font-weight: 600;">${g.length} мм</td>
-                <td class="text-center font-mono" style="color: #C53030;">-2 × ${(connectorParams.hubDiameter / 2).toFixed(0)} мм</td>
+                <td class="text-center font-mono" style="color: #C53030;">-2 × ${(connectorParams.hubDiameter / 2).toFixed(connectorParams.hubDiameter < 10 ? 1 : 0)} мм</td>
                 <td class="text-right font-mono font-black" style="color: #1B4D2E; background: #F0FFF4;">${netCut} мм</td>
                 <td class="text-center font-mono">${(g.endAngleStart || 5.2).toFixed(1)}°</td>
                 <td class="text-right font-mono">${linearM} м</td>
@@ -410,8 +411,8 @@ export function generateSpecificationHTML(model: DomeModel): string {
         </thead>
         <tbody>
           <tr>
-            <td><b>Болт шестигранний М${connectorParams.boltDiameter} × 70 мм</b></td>
-            <td>DIN 933, клас міцності 8.8, оцинкований</td>
+            <td><b>Болт шестигранний / гвинт М${connectorParams.boltDiameter} × ${boltLenMm} мм</b></td>
+            <td>DIN 933 / DIN 7991, клас міцності 8.8, оцинкований</td>
             <td class="text-center font-mono">${(connectorParams.boltHoleCount || 2) * 5} шт</td>
             <td class="text-center font-mono font-bold">${boltsCount} шт</td>
             <td>Кріплення бруса до лучей пластин</td>

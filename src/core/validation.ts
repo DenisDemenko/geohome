@@ -54,11 +54,12 @@ export function validateDome(
       });
     }
 
-    if (edge.length < 100) {
+    // For miniature scale models (diameter down to 150 mm), struts are naturally short
+    if (edge.length < 5) {
       issues.push({
         level: "warning",
         code: "SHORT_BEAM",
-        message: `Балка #${edge.id} надто коротка (${edge.length} мм) для виготовлення`,
+        message: `Балка #${edge.id} критично коротка (${edge.length} мм) для виготовлення`,
         edgeId: edge.id
       });
     }

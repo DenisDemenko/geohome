@@ -55,8 +55,8 @@ export const BeamBlueprintsPanel: React.FC<BeamBlueprintsPanelProps> = ({
   }, [model.edges, activeGroup]);
 
   const activeMiter = useMemo(() => {
-    return calculateBeamMiterAngles(activeSampleEdge, model.nodes);
-  }, [activeSampleEdge, model.nodes]);
+    return calculateBeamMiterAngles(activeSampleEdge, model.nodes, activeParams);
+  }, [activeSampleEdge, model.nodes, activeParams]);
 
   // Generated SVG content
   const currentSvg = useMemo(() => {

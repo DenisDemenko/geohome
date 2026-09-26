@@ -2,6 +2,7 @@ import React from "react";
 import { DomeModel, NodeId, EdgeId, FaceId } from "../core/types";
 import { calculateConnector } from "../core/connectors";
 import { calculateBeamMiterAngles } from "../core/beams";
+import { DEFAULT_SHEATHING_PARAMS, PLYWOOD_MATERIALS } from "../core/sheathing";
 import {
   generateConnectorSVG,
   generateSingleBeamBlueprintSVG,
@@ -132,7 +133,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   if (selectedEdgeId !== null) {
     const edge = model.edges[selectedEdgeId];
     if (!edge) return null;
-    const miter = calculateBeamMiterAngles(edge, model.nodes);
+    const miter = calculateBeamMiterAngles(edge, model.nodes, model.connectorParams);
 
     return (
       <div className="p-5 rounded-3xl tactile-card border border-white/80 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -182,7 +183,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <div className="p-2.5 rounded-xl tactile-inset-subtle">
             <span className="text-[10px] text-[#DE7C5A] font-bold block">Кільце конектора</span>
             <span className="font-mono font-bold text-sm text-[#DE7C5A]">
-              -{(model.connectorParams.hubDiameter / 2).toFixed(0)} мм
+              -{(model.connectorParams.hubDiameter / 2).toFixed(model.connectorParams.hubDiameter < 10 ? 1 : 0)} мм
             </span>
             <span className="text-[9px] text-[#8C9BAE] block">відступ з кожного торця</span>
           </div>
@@ -240,6 +241,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     const face = model.faces[selectedFaceId];
     if (!face) return null;
     const group = model.faceGroups.find(g => g.type === face.type);
+    const sheathing = model.sheathingParams || DEFAULT_SHEATHING_PARAMS;
+    const thicknessMm = sheathing.thickness || 12;
+    const areaM2 = face.area / 1_000_000;
+    const volM3 = areaM2 * (thicknessMm / 1000);
+    const weightKg = volM3 * (sheathing.density || 680);
+    const matName = PLYWOOD_MATERIALS.find(m => m.id === sheathing.material)?.name || "Фанера";
 
     return (
       <div className="p-5 rounded-3xl tactile-card border border-white/80 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -252,7 +259,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <h3 className="text-sm font-bold text-[#1A2E3B]">
                 Інспектор панелі обшивки #{face.id}
               </h3>
-              <p className="text-[11px] text-[#5A6778]">Тип грані: {face.type}</p>
+              <p className="text-[11px] text-[#5A6778]">Тип грані: {face.type} · {matName}</p>
             </div>
           </div>
           <button
@@ -267,7 +274,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <div className="p-2.5 rounded-xl tactile-inset-subtle">
             <span className="text-[10px] text-[#8C9BAE] block">Площа</span>
             <span className="font-mono font-bold text-sm text-[#1A2E3B]">
-              {(face.area / 1_000_000).toFixed(3)} м²
+              {areaM2.toFixed(3)} м²
             </span>
           </div>
           <div className="p-2.5 rounded-xl tactile-inset-subtle">
@@ -280,6 +287,27 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             <span className="text-[10px] text-[#8C9BAE] block">Кути панелі</span>
             <span className="font-mono font-bold text-xs text-[#DE7C5A]">
               {group ? group.angles.join("° / ") : "---"}°
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 mb-3 text-xs">
+          <div className="p-2.5 rounded-xl bg-[#FAF5EE] border border-[#EFE7DC]">
+            <span className="text-[10px] text-[#8B6534] font-semibold block">Товщина фанери</span>
+            <span className="font-mono font-bold text-sm text-[#8B6534]">
+              {thicknessMm} мм
+            </span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-[#FAF5EE] border border-[#EFE7DC]">
+            <span className="text-[10px] text-[#5A6778] font-semibold block">Вага плити</span>
+            <span className="font-mono font-bold text-xs text-[#1A2E3B]">
+              {weightKg < 1 ? `${(weightKg * 1000).toFixed(0)} г` : `${weightKg.toFixed(2)} кг`}
+            </span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-[#FAF5EE] border border-[#EFE7DC]">
+            <span className="text-[10px] text-[#5A6778] font-semibold block">Об'єм плити</span>
+            <span className="font-mono font-bold text-xs text-[#1A2E3B]">
+              {(volM3 * 1000).toFixed(2)} л
             </span>
           </div>
         </div>

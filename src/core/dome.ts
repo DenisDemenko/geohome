@@ -4,7 +4,8 @@ import {
   Node,
   Face,
   BeamProfile,
-  ConnectorParams
+  ConnectorParams,
+  SheathingParams
 } from "./types";
 import { ICOSAHEDRON_VERTICES, ICOSAHEDRON_FACES } from "./icosahedron";
 import { subdivideIcosahedron } from "./subdivision";
@@ -12,11 +13,13 @@ import { buildTopology } from "./topology";
 import { validateDome } from "./validation";
 import { DEFAULT_BEAM_PROFILES, analyzeBeamStructure } from "./beams";
 import { DEFAULT_CONNECTOR_PARAMS } from "./connectors";
+import { DEFAULT_SHEATHING_PARAMS, getRecommendedPlywoodThickness } from "./sheathing";
 
 export function generateDome(
   parameters: DomeParameters,
   customProfile?: BeamProfile,
-  customConnector?: ConnectorParams
+  customConnector?: ConnectorParams,
+  customSheathing?: SheathingParams
 ): DomeModel {
   const { diameter, frequency, cutType, height } = parameters;
 
@@ -256,16 +259,19 @@ export function generateDome(
 
   // Apply timber strut trimming / cut-back based on connector ring diameter
   const hubDiam = connectorParams.hubDiameter || 140;
-  const hubSetback = Math.round((hubDiam / 2) * 10) / 10;
 
   for (const edge of topology.edges) {
+    const effectiveHub = Math.min(hubDiam, edge.length * 0.5);
+    const hubSetback = Math.round((effectiveHub / 2) * 10) / 10;
     edge.hubSetback = hubSetback;
-    edge.cutLength = Math.max(10, Math.round((edge.length - hubDiam) * 10) / 10);
+    edge.cutLength = Math.max(0.5, Math.round((edge.length - effectiveHub) * 10) / 10);
   }
 
   for (const group of topology.beamGroups) {
+    const effectiveHub = Math.min(hubDiam, group.length * 0.5);
+    const hubSetback = Math.round((effectiveHub / 2) * 10) / 10;
     group.hubSetback = hubSetback;
-    group.cutLength = Math.max(10, Math.round((group.length - hubDiam) * 10) / 10);
+    group.cutLength = Math.max(0.5, Math.round((group.length - effectiveHub) * 10) / 10);
   }
 
   const structuralAnalysis = analyzeBeamStructure(
@@ -291,6 +297,10 @@ export function generateDome(
     approved: false,
     beamProfile,
     structuralAnalysis,
-    connectorParams
+    connectorParams,
+    sheathingParams: customSheathing || {
+      ...DEFAULT_SHEATHING_PARAMS,
+      thickness: getRecommendedPlywoodThickness(diameter)
+    }
   };
 }

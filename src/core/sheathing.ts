@@ -2,9 +2,41 @@ import {
   DomeModel,
   Face,
   FaceTypeGroup,
-  SheathingSheetLayout
+  SheathingSheetLayout,
+  SheathingParams
 } from "./types";
 import { unfoldTriangleTo2D } from "./math";
+
+export const PLYWOOD_MATERIALS: {
+  id: SheathingParams["material"];
+  name: string;
+  density: number; // kg/m3
+  description: string;
+}[] = [
+  { id: "plywood_birch", name: "Березова фанера ФСФ/ФК", density: 680, description: "Висока міцність, 680 кг/м³" },
+  { id: "plywood_pine", name: "Хвойна фанера", density: 550, description: "Вологостійка, легка, 550 кг/м³" },
+  { id: "osb3", name: "Плита OSB-3", density: 640, description: "Орієнтовано-стружкова, 640 кг/м³" },
+  { id: "balsa", name: "Бальза / Авіафанера", density: 140, description: "Для макетів купола 15-50 см, 140 кг/м³" },
+  { id: "polycarbonate", name: "Монолітний полікарбонат", density: 1200, description: "Прозоре скління купола, 1200 кг/м³" }
+];
+
+export const DEFAULT_SHEATHING_PARAMS: SheathingParams = {
+  thickness: 12,
+  material: "plywood_birch",
+  density: 680,
+  offsetMm: 0,
+  seamGapMm: 2,
+  finish: "colored"
+};
+
+export function getRecommendedPlywoodThickness(diameterMm: number): number {
+  if (diameterMm <= 300) return 1.5;
+  if (diameterMm <= 800) return 3;
+  if (diameterMm <= 2000) return 6;
+  if (diameterMm <= 5000) return 9;
+  if (diameterMm <= 9000) return 12;
+  return 15;
+}
 
 export interface SheathingPanelData {
   id: number;

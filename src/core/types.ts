@@ -132,17 +132,32 @@ export interface StructuralAnalysis {
   recommendedMinDepthMm: number;
 }
 
+export interface SheathingParams {
+  /** Plywood / sheathing panel thickness in mm (e.g. 1.5, 3, 6, 9, 12, 15, 18, 21, 24) */
+  thickness: number;
+  /** Material type */
+  material: "plywood_birch" | "plywood_pine" | "osb3" | "mdf" | "polycarbonate" | "balsa";
+  /** Material density in kg/m3 */
+  density: number;
+  /** Outward offset from beams in mm */
+  offsetMm?: number;
+  /** Expansion seam / gap between adjacent triangle panels in mm */
+  seamGapMm?: number;
+  /** Visual finish style */
+  finish?: "colored" | "plywood";
+}
+
 export interface ConnectorParams {
   type: "star_plate" | "pipe_hub" | "good_karma" | "spider";
-  /** Central core hub diameter/size in mm (adjustable 20mm - 300mm) */
+  /** Central core hub diameter/size in mm (adjustable 2mm - 300mm) */
   hubDiameter: number;
-  /** Ray / tab length in mm (adjustable 20mm - 300mm) */
+  /** Ray / tab length in mm (adjustable 2mm - 300mm) */
   tabLength: number;
-  /** Ray / tab width in mm (adjustable 20mm - 150mm) */
+  /** Ray / tab width in mm (adjustable 1.5mm - 150mm) */
   tabWidth: number;
   /** Plate steel thickness in mm */
   thickness: number;
-  /** Bolt diameter in mm (e.g. 8 for M8, 10 for M10, 12 for M12) */
+  /** Bolt diameter in mm (e.g. 1.6 for M1.6, 2 for M2, 3 for M3, 8 for M8, 10 for M10, 12 for M12) */
   boltDiameter: number;
   /** Distance from hub boundary to bolt holes */
   boltDistance: number;
@@ -151,6 +166,8 @@ export interface ConnectorParams {
   /** Center cutout style: thunder lightning bolt like Thunder Domes, round hole, or solid */
   centerCutout?: "lightning" | "circle" | "hex" | "solid";
   material: "steel_st3" | "stainless_304" | "aluminum_d16t" | "plywood";
+  /** Whether proportional auto-scaling is enabled with dome diameter */
+  autoProportional?: boolean;
 }
 
 export interface ConnectorRayAngleDetail {
@@ -276,4 +293,5 @@ export interface DomeModel {
   beamProfile: BeamProfile;
   structuralAnalysis: StructuralAnalysis;
   connectorParams: ConnectorParams;
+  sheathingParams?: SheathingParams;
 }
