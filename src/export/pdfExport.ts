@@ -1,7 +1,18 @@
 import { DomeModel, SheathingSheetLayout } from "../core/types";
 import { classifyConnectorTypes } from "../core/connectors";
-import { calculateSheetNesting } from "../core/sheathing";
+import {
+  calculateSheetNesting,
+  calculateWindowNesting,
+  calculateInnerSheathingNesting,
+  calculateSolarNesting
+} from "../core/sheathing";
+import {
+  INNER_SHEATHING_MATERIALS,
+  calculateSolarGeneration,
+  calculateDoorwayTriangulationAndPanels
+} from "../core/conversions";
 import { generateSheathingNestingSVG } from "./svgExport";
+import { buildPackagingPlan } from "../core/packaging";
 
 /**
  * Generates comprehensive printable HTML for the dome engineering specification.
@@ -15,8 +26,13 @@ export function generateSpecificationHTML(model: DomeModel): string {
   const totalLinearMeters = Math.round(
     model.beamGroups.reduce((sum, g) => sum + (g.length * g.count) / 1000, 0) * 10
   ) / 10;
+  const isRound = beamProfile.type === "circular" || beamProfile.type === "pipe";
+  const dVal = beamProfile.diameter || beamProfile.width;
+  const crossAreaM2 = isRound
+    ? (Math.PI / 4) * Math.pow(dVal / 1000, 2)
+    : (beamProfile.width / 1000) * (beamProfile.depth / 1000);
   const totalBeamVolumeM3 = Math.round(
-    (totalLinearMeters * (beamProfile.width / 1000) * (beamProfile.depth / 1000)) * 100
+    (totalLinearMeters * crossAreaM2) * 100
   ) / 100;
   const totalBeamWeightKg = Math.round(totalBeamVolumeM3 * beamProfile.density);
 
@@ -26,11 +42,87 @@ export function generateSpecificationHTML(model: DomeModel): string {
   const washersCount = boltsCount * 2;
   const boltLenMm = Math.max(6, Math.min(140, Math.round((beamProfile.width + connectorParams.thickness * 2 + 10) / 5) * 5));
 
-  // Sheathing
-  const nesting = calculateSheetNesting(model);
-  const sheathingAreaM2 = Math.round(
-    model.faceGroups.reduce((sum, f) => sum + f.area * f.count, 0) * 10
-  ) / 10;
+  // Sheathing, Converted Windows, Doors & Solar BIPV
+  const windowFaceIds = model.windowFaceIds || [];
+  const windowFaceSet = new Set(windowFaceIds);
+  const hasWindows = windowFaceSet.size > 0;
+
+  const doorFaceIds = model.doorFaceIds || [];
+  const doorFaceSet = new Set(doorFaceIds);
+  const hasDoor = doorFaceSet.size > 0;
+
+  const solarFaceIds = model.solarFaceIds || [];
+  const solarFaceSet = new Set(solarFaceIds);
+  const hasSolar = solarFaceSet.size > 0;
+
+  const nesting = calculateSheetNesting(model); // Excludes windows, doors, solar
+  const windowNesting = calculateWindowNesting(model); // Dedicated window plastic/glass nesting
+  const solarNesting = calculateSolarNesting(model); // Dedicated solar BIPV nesting
+
+  // Inner sheathing calculation
+  const innerMatId = model.innerSheathingParams?.material || "drywall";
+  const innerMatConfig =
+    INNER_SHEATHING_MATERIALS.find(m => m.id === innerMatId) ||
+    INNER_SHEATHING_MATERIALS[0];
+  const innerNesting = calculateInnerSheathingNesting(
+    model,
+    innerMatConfig.standardSheet.w,
+    innerMatConfig.standardSheet.h,
+    6,
+    15,
+    10,
+    3000,
+    1,
+    innerMatConfig.name
+  );
+
+  const solarGen = calculateSolarGeneration(model);
+
+  const solidPanelsCount = nesting.totalPanels;
+  const solidSheathingAreaM2 = Math.round(nesting.domeSurfaceAreaM2 * 10) / 10;
+  const totalGlazingAreaM2 = Math.round(windowNesting.domeSurfaceAreaM2 * 10) / 10;
+  const doorAreaM2 = Math.round(
+    model.faces
+      .filter(f => doorFaceSet.has(f.id))
+      .reduce((sum, f) => sum + f.area / 1_000_000, 0) * 100
+  ) / 100;
+
+  // Doorway Triangulation, Connecting Beams & Infill Panels
+  const doorTriResult = hasDoor ? (() => {
+    let anchorFaceId = model.doorParams?.anchorFaceId;
+    if (anchorFaceId === undefined || !doorFaceSet.has(anchorFaceId)) {
+      let lowestZ = Infinity;
+      let bestId = doorFaceIds[0];
+      for (const fid of doorFaceIds) {
+        const f = model.faces.find(fa => fa.id === fid);
+        if (f) {
+          const zAvg = (model.nodes[f.a].position.z + model.nodes[f.b].position.z + model.nodes[f.c].position.z) / 3;
+          if (zAvg < lowestZ) {
+            lowestZ = zAvg;
+            bestId = f.id;
+          }
+        }
+      }
+      anchorFaceId = bestId;
+    }
+    const effBeamDepth = (model.beamProfile.type === "circular" || model.beamProfile.type === "pipe")
+      ? (model.beamProfile.diameter || model.beamProfile.width)
+      : model.beamProfile.depth;
+    return calculateDoorwayTriangulationAndPanels(
+      model,
+      anchorFaceId,
+      model.doorParams?.widthMm || 900,
+      model.doorParams?.heightMm || 2050,
+      Math.max(160, effBeamDepth + 60),
+      model.doorParams?.elevationFromBaseMm || 0,
+      model.doorParams?.offsetFromDomeMm || 0,
+      model.doorParams?.bayClusterType || "auto",
+      model.doorParams?.clusterHubNodeId
+    );
+  })() : null;
+
+  // Packaging and Logistics Plan
+  const packagingPlan = buildPackagingPlan(model);
 
   const dateStr = new Date().toLocaleDateString("uk-UA", {
     year: "numeric",
@@ -302,7 +394,7 @@ export function generateSpecificationHTML(model: DomeModel): string {
 
       <!-- Section 1: Beam Cutting Schedule -->
       <div class="section-title">
-        <span>1. Відомість розкрою балок каркаса (брус ${beamProfile.width} × ${beamProfile.depth} мм)</span>
+        <span>1. Відомість розкрою балок каркаса (${isRound ? `круглий переріз Ø ${dVal} мм` : `брус ${beamProfile.width} × ${beamProfile.depth} мм`})</span>
         <span style="font-size: 10px; color: #5B9279;">Всього балок: ${totalBeamsCount} шт (${totalLinearMeters} пог. м)</span>
       </div>
 
@@ -325,7 +417,7 @@ export function generateSpecificationHTML(model: DomeModel): string {
             .map(g => {
               const netCut = g.cutLength || Math.max(0.5, Math.round(g.length - connectorParams.hubDiameter));
               const linearM = Math.round(((netCut * g.count) / 1000) * 10) / 10;
-              const volM3 = Math.round((linearM * (beamProfile.width / 1000) * (beamProfile.depth / 1000)) * 100) / 100;
+              const volM3 = Math.round((linearM * crossAreaM2) * 100) / 100;
               const weightKg = Math.round(volM3 * beamProfile.density);
 
               return `<tr>
@@ -374,10 +466,14 @@ export function generateSpecificationHTML(model: DomeModel): string {
           ${connectorTypes
             .map(t => {
               const bendAnglesStr = t.rayDetails.map(r => `${r.bendAngleDeg}°`).join(", ");
+              const sampleLabel = model.nodes[t.sampleNodeId]?.label || `AA${t.sampleNodeId + 1}`;
+              const nodeLabels = t.nodeIds.map(nid => model.nodes[nid]?.label || `AA${nid + 1}`).join(", ");
               return `<tr>
                 <td>
                   <b>${t.name}</b>
+                  <span class="badge" style="background:#1E293B;color:#FFFFFF;margin-left:6px;font-family:monospace;font-size:9.5px;">${sampleLabel}</span>
                   ${t.isBoundary ? '<span class="badge" style="background:#E1EDE3;color:#1A3E26;margin-left:4px;">Основа Z=0</span>' : ''}
+                  <div style="font-size: 9px; color: #2563EB; margin-top: 2px; font-family: monospace;"><b>Вузли купола:</b> ${nodeLabels}</div>
                 </td>
                 <td class="text-center font-mono">${t.rayCount}</td>
                 <td class="text-center font-mono font-bold" style="color: #2E7D32; font-size: 11px;">${t.countInDome} шт</td>
@@ -443,15 +539,23 @@ export function generateSpecificationHTML(model: DomeModel): string {
 
       <!-- Section 4: Sheathing Panels Estimation -->
       <div class="section-title">
-        <span>4. Специфікація плитного матеріалу обшивки покрівлі (OSB-3 / ФСФ 12 мм)</span>
-        <span style="font-size: 10px; color: #4A7C9B;">Площа: ${sheathingAreaM2} м² (${nesting.totalSheetsRequired} листів 1250×2500 мм)</span>
+        <span>4. Специфікація плитного матеріалу глухої обшивки (OSB-3 / ФСФ 12 мм)</span>
+        <span style="font-size: 10px; color: #4A7C9B;">Площа: ${solidSheathingAreaM2} м² (${nesting.totalSheetsRequired} листів ${nesting.sheetWidth}×${nesting.sheetHeight} мм)</span>
       </div>
+
+      ${hasWindows || hasDoor || hasSolar ? `
+      <div style="font-size: 9.5px; color: #0369A1; background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px;">
+        ℹ️ <b>Примітка вилучення конвертованих об'єктів:</b> З розкрою глухої обшивки вилучено:
+        ${hasWindows ? `<b>${windowFaceSet.size} віконних граней</b> (винесені в окремий розкрій пластику/скла), ` : ''}
+        ${hasDoor ? `<b>${doorFaceSet.size} граней дверного пройму</b> (чистий отвір під портал), ` : ''}
+        ${hasSolar ? `<b>${solarFaceSet.size} сонячних BIPV трикутників</b> (фотоелементи під склом)` : ''}.
+      </div>` : ''}
 
       <table>
         <thead>
           <tr>
             <th>Тип трикутника</th>
-            <th class="text-center">Кількість</th>
+            <th class="text-center">Кількість глухих</th>
             <th class="text-center">Розміри сторін a × b × c (мм)</th>
             <th class="text-center">Внутрішні кути (°)</th>
             <th class="text-right">Площа 1 шт (м²)</th>
@@ -461,22 +565,341 @@ export function generateSpecificationHTML(model: DomeModel): string {
         <tbody>
           ${model.faceGroups
             .map(f => {
-              const totalArea = Math.round(f.area * f.count * 100) / 100;
+              const windowCount = model.faces.filter(face => face.type === f.type && windowFaceSet.has(face.id)).length;
+              const doorCount = model.faces.filter(face => face.type === f.type && doorFaceSet.has(face.id)).length;
+              const solarCount = model.faces.filter(face => face.type === f.type && solarFaceSet.has(face.id)).length;
+              const excludedCount = windowCount + doorCount + solarCount;
+              const solidCount = f.count - excludedCount;
+              if (solidCount <= 0) return '';
+              const totalArea = Math.round(f.area * solidCount * 100) / 100;
               return `<tr>
                 <td><span class="badge" style="background: ${f.color}; color: #1A2E3B;">Грань ${f.type}</span></td>
-                <td class="text-center font-mono font-bold">${f.count} шт</td>
+                <td class="text-center font-mono font-bold">${solidCount} шт${excludedCount > 0 ? ` <span style="font-size: 9px; color: #0284C7;">(-${excludedCount} конв.)</span>` : ''}</td>
                 <td class="text-center font-mono">${f.lengths.join(" × ")} мм</td>
                 <td class="text-center font-mono">${f.angles.join("° / ")}°</td>
                 <td class="text-right font-mono">${f.area} м²</td>
                 <td class="text-right font-mono font-bold">${totalArea} м²</td>
               </tr>`;
             })
+            .filter(Boolean)
             .join("")}
           <tr class="highlight-row">
-            <td colspan="1"><b>РАЗОМ ОБШИВКА</b></td>
-            <td class="text-center font-mono">${model.faces.length} шт</td>
-            <td colspan="3" class="text-right">Рекомендовано листів 1250×2500 мм (з запасом на розкрій):</td>
+            <td colspan="1"><b>РАЗОМ ГЛУХА ОБШИВКА</b></td>
+            <td class="text-center font-mono font-bold">${solidPanelsCount} шт</td>
+            <td colspan="3" class="text-right">Потрібно листів фанери (${nesting.sheetWidth}×${nesting.sheetHeight} мм, з запасом):</td>
             <td class="text-right font-mono font-bold" style="color: #4A7C9B; font-size: 11px;">${nesting.totalSheetsRequired} листів</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Section 5: Converted Windows & Glazing Cutting Plan -->
+      <div class="section-title">
+        <span>5. Об'єкти конвертації «Вікно» (Скління / Монолітний полікарбонат / Скло)</span>
+        <span style="font-size: 10px; color: #0284C7;">
+          ${hasWindows ? `Вікон: ${windowFaceSet.size} шт · Площа: ${totalGlazingAreaM2} м² · Листів пластику/скла: ${windowNesting.totalSheetsRequired} шт` : 'Вікон: 0 шт'}
+        </span>
+      </div>
+
+      ${hasWindows ? `
+      <table>
+        <thead>
+          <tr>
+            <th>Тип вікна / Грань</th>
+            <th class="text-center">К-сть вікон</th>
+            <th class="text-center">Габарити трикутника (мм)</th>
+            <th class="text-right">Площа скління (м²)</th>
+            <th class="text-center">Периметр окладу (пог. м)</th>
+            <th>Матеріал & Специфікація</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${model.faceGroups
+            .map(f => {
+              const windowCountOfThisType = model.faces.filter(face => face.type === f.type && windowFaceSet.has(face.id)).length;
+              if (windowCountOfThisType <= 0) return '';
+              const wArea = Math.round(f.area * windowCountOfThisType * 100) / 100;
+              const perimeterPerUnitM = (f.lengths[0] + f.lengths[1] + f.lengths[2]) / 1000;
+              const totalPerimeterM = Math.round(perimeterPerUnitM * windowCountOfThisType * 10) / 10;
+              return `<tr>
+                <td><b>Віконна грань ${f.type}</b></td>
+                <td class="text-center font-mono font-bold" style="color: #0284C7;">${windowCountOfThisType} шт</td>
+                <td class="text-center font-mono">${f.lengths.join(" × ")} мм</td>
+                <td class="text-right font-mono font-bold">${wArea} м²</td>
+                <td class="text-center font-mono">${totalPerimeterM} м</td>
+                <td>Монолітний полікарбонат 4–6 мм / Загартований склопакет, притискний оклад</td>
+              </tr>`;
+            })
+            .filter(Boolean)
+            .join("")}
+          <tr class="highlight-row" style="background: #F0F9FF;">
+            <td colspan="1"><b>РАЗОМ ОБ'ЄКТИ ВІКОН</b></td>
+            <td class="text-center font-mono font-bold" style="color: #0284C7; font-size: 11.5px;">${windowFaceSet.size} шт</td>
+            <td colspan="2" class="text-right"><b>ОКРЕМИЙ АРКУШ РОЗКРОЮ ПІД ПЛАСТИК/СКЛО:</b></td>
+            <td colspan="2" class="font-mono font-bold" style="color: #0369A1;">
+              ${windowNesting.totalSheetsRequired} лист. (${windowNesting.sheetWidth}×${windowNesting.sheetHeight} мм) · Різ: ${windowNesting.totalLinearCutMeters} м · Відходи: ~${windowNesting.wastePercentage}%
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      ` : `
+      <div style="padding: 10px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; font-size: 10px; color: #64748B;">
+        Об'єкти конвертації «Вікно» не обрані — всі грані купола обшиваються глухими панелями. Для додавання вікон скористайтеся інструментом «Режим конверсії у вікна» в 3D сцені або інспекторі граней.
+      </div>
+      `}
+
+      <!-- Section 6: Converted Doorway Opening, Connecting Beams & Triangulated Sheathing Panels -->
+      <div class="section-title">
+        <span>6. Конструкція дверного пройму, з'єднувальні балки та треангуляція обшивки</span>
+        <span style="font-size: 10px; color: #D97706;">
+          ${hasDoor ? `Портал: ${model.doorParams?.widthMm || 900} × ${model.doorParams?.heightMm || 2050} мм · Балки: ${doorTriResult ? doorTriResult.connectingBeams.length : 0} шт · Деталі обшивки: ${doorTriResult ? (doorTriResult.infillTriangles.length + (doorTriResult.vestibulePanels?.length || 0) + doorTriResult.revealPanels.length) : 0} шт` : 'Дверний пройм не задано'}
+        </span>
+      </div>
+
+      ${hasDoor ? `
+      <table>
+        <thead>
+          <tr>
+            <th>Параметр дверного блоку</th>
+            <th class="text-center">Значення</th>
+            <th>Конструктивне рішення / Вузол сполучення</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Чистий світловий габарит пройому</b></td>
+            <td class="text-center font-mono font-bold" style="color: #D97706;">${model.doorParams?.widthMm || 900} × ${model.doorParams?.heightMm || 2050} мм</td>
+            <td>Регульований прямокутний прохід під стандартний дверний блок 800/900 мм</td>
+          </tr>
+          <tr>
+            <td><b>Захоплені трикутники купола</b></td>
+            <td class="text-center font-mono font-bold">${doorFaceSet.size} шт (№ ${Array.from(doorFaceSet).join(", ")})</td>
+            <td>Авто-захоплення вертикально суміжного трикутника для забезпечення проходу на повну висоту 2.05 м</td>
+          </tr>
+          <tr>
+            <td><b>Виріз у куполі / чистий отвір</b></td>
+            <td class="text-center font-mono">${doorAreaM2} м²</td>
+            <td>Глухі грані каркаса вилучені, перекриваються треангульованими панелями примикання</td>
+          </tr>
+          <tr>
+            <td><b>Портальна рама та коробка</b></td>
+            <td class="text-center font-mono">${doorTriResult?.portal.postThicknessMm || 80} × ${doorTriResult?.portal.depthMm || 160} мм</td>
+            <td>Вертикальні стійки (ліва/права), перемичка-ригель та поріг із клеєного бруса</td>
+          </tr>
+        </tbody>
+      </table>
+
+      ${doorTriResult ? `
+      <!-- 6.1. Connecting Beams Specification -->
+      <div style="margin-top: 10px; margin-bottom: 4px; font-size: 10.5px; font-weight: bold; color: #9A3412;">
+        6.1. Специфікація з'єднувальних балок порталу дверей з каркасом купола (Треангуляція каркаса):
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 50px;">Поз.</th>
+            <th>Назва з'єднувальної балки</th>
+            <th class="text-center">Довжина (мм)</th>
+            <th class="text-center">Переріз (мм)</th>
+            <th>Вузли кріплення та торцювання</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${doorTriResult.connectingBeams.map(cb => `
+            <tr>
+              <td class="font-mono font-bold" style="color: #9A3412;">${cb.id}</td>
+              <td><b>${cb.name}</b></td>
+              <td class="text-center font-mono font-bold">${cb.lengthMm} мм</td>
+              <td class="text-center font-mono">${cb.widthMm} × ${cb.depthMm} мм</td>
+              <td>Врізка в стійку порталу / стик з вузлом каркаса купола</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+
+      <!-- 6.2. Triangulated Infill & Reveal Sheathing Panels Specification -->
+      <div style="margin-top: 10px; margin-bottom: 4px; font-size: 10.5px; font-weight: bold; color: #1E3A8A;">
+        6.2. Трикутники з'єднання дверей з каркасом та укоси прорізу (Входять у карти розкрою обшивки):
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 55px;">Марка</th>
+            <th>Назва деталі обшивки</th>
+            <th class="text-center">Сторони (мм)</th>
+            <th class="text-center">Кути (°)</th>
+            <th class="text-right">Площа (м²)</th>
+            <th>Входження в карти розкрою</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${[...doorTriResult.infillTriangles, ...(doorTriResult.vestibulePanels || []), ...doorTriResult.revealPanels].map(tp => `
+            <tr>
+              <td class="font-mono font-bold" style="color: #1E3A8A;">${tp.type}</td>
+              <td><b>${tp.name}</b></td>
+              <td class="text-center font-mono">${tp.lengths.join(" × ")} мм</td>
+              <td class="text-center font-mono">${tp.angles.join("° / ")}°</td>
+              <td class="text-right font-mono font-bold">${tp.areaM2} м²</td>
+              <td>${tp.isOpeningReveal ? 'Обшивка укосу коробки (зовнішня + внутрішня)' : 'Треангульоване примикання до граней купола (в картах ЧПУ)'}</td>
+            </tr>
+          `).join("")}
+          <tr class="highlight-row" style="background: #FFFBEB;">
+            <td colspan="4"><b>РАЗОМ ДЕТАЛЕЙ ПРИМИКАННЯ ДВЕРНОГО ПРОЙМУ ДО КАРКАСА:</b></td>
+            <td class="text-right font-mono font-bold" style="color: #9A3412;">
+              ${Math.round([...doorTriResult.infillTriangles, ...(doorTriResult.vestibulePanels || []), ...doorTriResult.revealPanels].reduce((s, p) => s + p.areaM2, 0) * 100) / 100} м²
+            </td>
+            <td><b>Автоматично враховано у картах розкрою</b> на листи зовнішньої та внутрішньої обшивки</td>
+          </tr>
+        </tbody>
+      </table>
+      ` : ''}
+      ` : `
+      <div style="padding: 10px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; font-size: 10px; color: #64748B;">
+        Дверний пройм не налаштовано. Оберіть грань першого ярусу в 3D сцені або інспекторі та натисніть «Конвертувати у дверний пройм» з авто-захопленням сусідніх граней по висоті.
+      </div>
+      `}
+
+      <!-- Section 7: Converted Electrical Triangle for Electricity Generation Under Glass (Solar BIPV) -->
+      <div class="section-title">
+        <span>7. Об'єкт конвертації «Електричний трикутник» (BIPV генерація струму під склом)</span>
+        <span style="font-size: 10px; color: #10B981;">
+          ${hasSolar ? `Панелей: ${solarFaceSet.size} шт · Потужність: ${(solarGen.peakPowerWatts / 1000).toFixed(2)} кВт · Виробіток: ${solarGen.annualKWh} кВт·год/рік` : 'Електро-трикутники не обрані'}
+        </span>
+      </div>
+
+      ${hasSolar ? `
+      <table>
+        <thead>
+          <tr>
+            <th>Показник сонячної генерації</th>
+            <th class="text-center">Розрахункове значення</th>
+            <th>Технічні умови & Обладнання</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Кількість BIPV трикутників</b></td>
+            <td class="text-center font-mono font-bold" style="color: #10B981;">${solarFaceSet.size} шт</td>
+            <td>Трикутні інтегровані фотомодулі під загартованим склом</td>
+          </tr>
+          <tr>
+            <td><b>Загальна активна площа сонячних панелей</b></td>
+            <td class="text-center font-mono font-bold">${solarGen.totalAreaM2} м²</td>
+            <td>Вилучено з фанери, окремий розкрій спеціальних трикутників</td>
+          </tr>
+          <tr>
+            <td><b>Встановлена пікова потужність (DC)</b></td>
+            <td class="text-center font-mono font-bold" style="color: #047857; font-size: 11.5px;">${solarGen.peakPowerWatts} Вт (${(solarGen.peakPowerWatts / 1000).toFixed(2)} кВт)</td>
+            <td>Монокристалічні сонячні елементи (ККД ~21.5%, 210 Вт/м²)</td>
+          </tr>
+          <tr>
+            <td><b>Очікувана середньодобова генерація</b></td>
+            <td class="text-center font-mono font-bold">~${solarGen.dailyKWh} кВт·год / доба</td>
+            <td>Для інсоляції у сонячні дні (3.5–4.5 пік-годин)</td>
+          </tr>
+          <tr>
+            <td><b>Річна генерація електроенергії</b></td>
+            <td class="text-center font-mono font-bold" style="color: #059669;">~${solarGen.annualKWh} кВт·год / рік</td>
+            <td>Живлення освітлення, автоматики та накопичувального АКБ купола</td>
+          </tr>
+          <tr class="highlight-row" style="background: #ECFDF5;">
+            <td colspan="1"><b>РОЗКРІЙ СОНЯЧНИХ ПАНЕЛЕЙ:</b></td>
+            <td class="text-center font-mono font-bold" style="color: #047857;">${solarNesting.totalSheetsRequired} листів</td>
+            <td colspan="1" class="font-mono">Формат заготовок: ${solarNesting.sheetWidth}×${solarNesting.sheetHeight} мм · Окремий розкрій фотоелементів</td>
+          </tr>
+        </tbody>
+      </table>
+      ` : `
+      <div style="padding: 10px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; font-size: 10px; color: #64748B;">
+        Електричні трикутники не призначено. Оберіть грані на сонячній стороні купола в 3D сцені або інспекторі та натисніть «Електро-трикутник (Сонячна панель)» для генерації електроенергії під склом.
+      </div>
+      `}
+
+      <!-- Section 8: Inner Sheathing Specification & Nesting -->
+      <div class="section-title">
+        <span>8. Специфікація та розкрій внутрішньої обшивки (Гіпсокартон / ДСП / OSB / Фанера)</span>
+        <span style="font-size: 10px; color: #7C3AED;">
+          Матеріал: ${innerMatConfig.name} · Площа: ${innerNesting.domeSurfaceAreaM2} м² · Листів: ${innerNesting.totalSheetsRequired} шт
+        </span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Параметр внутрішньої обшивки</th>
+            <th class="text-center">Значення</th>
+            <th>Характеристика плитного матеріалу</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Обраний матеріал інтер'єру</b></td>
+            <td class="text-center font-mono font-bold" style="color: #7C3AED;">${innerMatConfig.name}</td>
+            <td>${innerMatConfig.description}</td>
+          </tr>
+          <tr>
+            <td><b>Формат серійного листа</b></td>
+            <td class="text-center font-mono font-bold">${innerMatConfig.standardSheet.w} × ${innerMatConfig.standardSheet.h} мм</td>
+            <td>${innerMatConfig.standardSheet.name}</td>
+          </tr>
+          <tr>
+            <td><b>Кількість внутрішніх трикутних панелей</b></td>
+            <td class="text-center font-mono font-bold">${innerNesting.totalPanels} шт</td>
+            <td>Повністю вилучено отвори під вікна (${windowFaceSet.size} шт) та двері (${doorFaceSet.size} шт)</td>
+          </tr>
+          <tr>
+            <td><b>Чиста площа внутрішніх стін купола</b></td>
+            <td class="text-center font-mono font-bold">${innerNesting.domeSurfaceAreaM2} м²</td>
+            <td>Площа обшивки з урахуванням вирахування віконних і дверних пройомів</td>
+          </tr>
+          <tr class="highlight-row" style="background: #F5F3FF;">
+            <td colspan="1"><b>ПОТРЕБА В ЛИСТАХ ДЛЯ ЧПУ РОЗКРОЮ:</b></td>
+            <td class="text-center font-mono font-bold" style="color: #6D28D9; font-size: 11.5px;">${innerNesting.totalSheetsRequired} листів</td>
+            <td colspan="1" class="font-mono">
+              Довжина різу: ${innerNesting.totalLinearCutMeters} м · Відходи розкрою: ~${innerNesting.wastePercentage}% · Зазор швів: 2 мм
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Section 9: Packaging & Pallet Logistics Plan -->
+      <div class="section-title">
+        <span>9. План оптимізації упаковки та відвантаження комплекту (палети, коробки, вага брутто)</span>
+        <span style="font-size: 10px; color: #2E7D32;">Всього палет: ${packagingPlan.totalPalletsCount} шт · Вага брутто: ${packagingPlan.totalGrossWeightKg} кг</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>№ Палети / Тип</th>
+            <th>Найменування вантажу на піддоні</th>
+            <th class="text-center">К-сть місць</th>
+            <th class="text-center">Габарити Д×Ш×В (мм)</th>
+            <th class="text-right">Нетто (кг)</th>
+            <th class="text-right">Брутто (кг)</th>
+            <th class="text-center">Стяжка / Фіксація</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${packagingPlan.pallets
+            .map(
+              p => `<tr>
+              <td><b>${p.id}</b> (${p.palletStandard.shortName})</td>
+              <td>${p.title}</td>
+              <td class="text-center font-mono font-bold">${p.totalPackagesCount} місць</td>
+              <td class="text-center font-mono">${p.palletStandard.lengthMm} × ${p.palletStandard.widthMm} × ${p.totalHeightWithPalletMm}</td>
+              <td class="text-right font-mono">${p.netCargoWeightKg} кг</td>
+              <td class="text-right font-mono font-bold">${p.grossWeightKg} кг</td>
+              <td class="text-center font-mono" style="font-size: 9px;">${p.strappingBandsCount} PET стрічки + стретч</td>
+            </tr>`
+            )
+            .join("")}
+          <tr class="highlight-row">
+            <td colspan="2"><b>РАЗОМ ВАНТАЖ КУПОЛА</b></td>
+            <td class="text-center font-mono font-bold">${packagingPlan.totalPackagesCount} місць</td>
+            <td class="text-center font-mono">Об'єм: ${packagingPlan.totalVolumeM3} м³ (LDM: ${packagingPlan.loadingMetersLdm})</td>
+            <td class="text-right font-mono">${packagingPlan.totalNetWeightKg} кг</td>
+            <td class="text-right font-mono font-bold" style="color: #2E7D32; font-size: 11px;">${packagingPlan.totalGrossWeightKg} кг</td>
+            <td class="text-center font-mono" style="color: #4A7C9B; font-size: 9.5px;">${packagingPlan.recommendedVehicle.name.split("(")[0]}</td>
           </tr>
         </tbody>
       </table>
@@ -555,6 +978,9 @@ export function generateSheathingNestingPDFHTML(
   const totalSheets = layout.totalSheetsRequired;
   const singleIdx = options?.singleSheetIndex;
 
+  const windowNesting = calculateWindowNesting(model);
+  const hasWindowSheets = !layout.isWindowGlazing && singleIdx === undefined && windowNesting.totalPanels > 0;
+
   const dateStr = new Date().toLocaleDateString("uk-UA", {
     year: "numeric",
     month: "long",
@@ -569,10 +995,41 @@ export function generateSheathingNestingPDFHTML(
   // Generate HTML for each sheet drawing page
   const sheetPagesHtml = sheetIndices
     .map(idx => {
+      const isWin = layout.isWindowGlazing;
+      const isInner = layout.isInnerSheathing;
+      const isSolar = layout.isSolarPV || layout.isSolarGlazing;
+
+      let sheetTitle = `ЧПУ КАРТА РОЗКРОЮ ФАНЕРИ — ЛИСТ ${idx + 1} З ${totalSheets} (${sheetW} × ${sheetH} мм)`;
+      let badgeLabel = `АРКУШ ${idx + 1} З ${totalSheets}`;
+      let badgeBg = "#1A2E3B";
+      let titleColor = "#1A2E3B";
+      let mainTitle = `КАРТА РОЗКРОЮ НА ЧПУ — ЛИСТ ${idx + 1} (ФАНЕРА ${sheetW} × ${sheetH} мм)`;
+
+      if (isWin) {
+        sheetTitle = `КАРТА РОЗКРОЮ: ПЛАСТИК / СКЛО (ВІКНА) — ЛИСТ ${idx + 1} З ${totalSheets} (${sheetW} × ${sheetH} мм)`;
+        badgeLabel = `ВІКНА · АРКУШ ${idx + 1} З ${totalSheets}`;
+        badgeBg = "#0284C7";
+        titleColor = "#0369A1";
+        mainTitle = `КАРТА РОЗКРОЮ: МОНОЛІТНИЙ ПОЛІКАРБОНАТ / СКЛО — ЛИСТ ${idx + 1}`;
+      } else if (isInner) {
+        sheetTitle = `КАРТА РОЗКРОЮ ВНУТРІШНЬОЇ ОБШИВКИ — ЛИСТ ${idx + 1} З ${totalSheets} (${sheetW} × ${sheetH} мм)`;
+        badgeLabel = `ВНУТРІШНЯ ОБШИВКА · АРКУШ ${idx + 1}`;
+        badgeBg = "#7C3AED";
+        titleColor = "#6D28D9";
+        mainTitle = `КАРТА РОЗКРОЮ ВНУТРІШНЬОЇ ОБШИВКИ (${layout.materialName || 'Гіпсокартон / OSB / Фанера / ДСП'}) — ЛИСТ ${idx + 1}`;
+      } else if (isSolar) {
+        sheetTitle = `КАРТА РОЗКРОЮ ЕЛЕКТРО-ТРИКУТНИКІВ BIPV — ЛИСТ ${idx + 1} З ${totalSheets} (${sheetW} × ${sheetH} мм)`;
+        badgeLabel = `СОНЯЧНІ ПАНЕЛІ BIPV · АРКУШ ${idx + 1}`;
+        badgeBg = "#059669";
+        titleColor = "#047857";
+        mainTitle = `КАРТА РОЗКРОЮ ЕЛЕКТРИЧНИХ ТРИКУТНИКІВ (BIPV ПІД СКЛОМ) — ЛИСТ ${idx + 1}`;
+      }
+
       const sheetSvg = generateSheathingNestingSVG(layout, idx, {
         showKerf: options?.showKerf !== false,
         showToolpath: options?.showToolpath !== false,
-        showTabs: options?.showTabs !== false
+        showTabs: options?.showTabs !== false,
+        sheetTitle
       });
 
       const sPanels = layout.placedPanels.filter(p => p.sheetIndex === idx);
@@ -582,10 +1039,12 @@ export function generateSheathingNestingPDFHTML(
     <div class="sheet-page">
       <div class="page-header">
         <div class="page-title-block">
-          <div class="stamp-badge">АРКУШ ${idx + 1} З ${totalSheets}</div>
+          <div class="stamp-badge" style="background:${badgeBg};">${badgeLabel}</div>
           <div>
-            <div class="main-title">КАРТА РОЗКРОЮ НА ЧПУ — ЛИСТ ${idx + 1} (ФАНЕРА ${sheetW} × ${sheetH} мм)</div>
-            <div class="sub-title">Купол ${parameters.frequency}V · Ø ${(parameters.diameter / 1000).toFixed(1)} м · Інструмент: Фреза Ø${toolDiam} мм · Відступ краю: ${layout.margin} мм</div>
+            <div class="main-title" style="color:${titleColor};">
+              ${mainTitle}
+            </div>
+            <div class="sub-title">Купол ${parameters.frequency}V · Ø ${(parameters.diameter / 1000).toFixed(1)} м · Інструмент: Фреза Ø${toolDiam} мм · Відступ краю: ${layout.margin} мм · Матеріал: ${layout.materialName || (isWin ? 'Полікарбонат / Скло' : isInner ? 'Інтер\'єрна плита' : isSolar ? 'BIPV Фотоелементи' : 'Фанера ФСФ')}</div>
           </div>
         </div>
         <div class="header-metrics">
@@ -626,6 +1085,64 @@ export function generateSheathingNestingPDFHTML(
     </div>`;
     })
     .join("\n");
+
+  // Separate sheets for converted windows (glazing on plastic / glass sheets)
+  const windowSheetPagesHtml = hasWindowSheets
+    ? Array.from({ length: windowNesting.totalSheetsRequired }, (_, wIdx) => {
+        const windowSvg = generateSheathingNestingSVG(windowNesting, wIdx, {
+          showKerf: options?.showKerf !== false,
+          showToolpath: options?.showToolpath !== false,
+          showTabs: options?.showTabs !== false,
+          sheetTitle: `КАРТА РОЗКРОЮ: ПЛАСТИК / СКЛО (ВІКНА) — ЛИСТ ${wIdx + 1} З ${windowNesting.totalSheetsRequired} (${windowNesting.sheetWidth} × ${windowNesting.sheetHeight} мм)`
+        });
+        const wPanels = windowNesting.placedPanels.filter(p => p.sheetIndex === wIdx);
+        const wSummary = windowNesting.sheetsSummary?.[wIdx];
+
+        return `
+    <div class="sheet-page">
+      <div class="page-header">
+        <div class="page-title-block">
+          <div class="stamp-badge" style="background: #0284C7;">ВІКНА · АРКУШ ${wIdx + 1} З ${windowNesting.totalSheetsRequired}</div>
+          <div>
+            <div class="main-title" style="color: #0369A1;">КАРТА РОЗКРОЮ: МОНОЛІТНИЙ ПОЛІКАРБОНАТ / СКЛО (ОБ'ЄКТИ КОНВЕРТАЦІЇ ВІКНО)</div>
+            <div class="sub-title">Формат: ${windowNesting.sheetWidth} × ${windowNesting.sheetHeight} мм · Фреза / Гідроабразив: Ø${windowNesting.toolDiameter || 4} мм · Відступ: ${windowNesting.margin} мм · Матеріал: Монолітний полікарбонат / Акрил / Скло</div>
+          </div>
+        </div>
+        <div class="header-metrics">
+          <div class="h-metric">
+            <span class="lbl">Вікон</span>
+            <span class="val" style="color: #0284C7;">${wPanels.length} шт</span>
+          </div>
+          <div class="h-metric">
+            <span class="lbl">Довжина різу</span>
+            <span class="val">${wSummary?.cutLengthM || 0} м</span>
+          </div>
+          <div class="h-metric">
+            <span class="lbl">Відходи</span>
+            <span class="val">~${wSummary?.wastePct || windowNesting.wastePercentage}%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="svg-stage">
+        <div class="svg-wrapper">
+          ${windowSvg}
+        </div>
+      </div>
+
+      <div class="page-footer">
+        <div class="parts-chips">
+          <span class="chip-label" style="color: #0369A1; font-weight: bold;">Віконні деталі на цьому листі:</span>
+          ${wSummary?.typesSummary || wPanels.map(p => `№${p.panelId} (${p.panelType})`).join(", ")}
+        </div>
+        <div class="sign-block">
+          <span>Різка пластику / скла: __________________</span>
+          <span>Контроль розмірів: __________________</span>
+        </div>
+      </div>
+    </div>`;
+      }).join("\n")
+    : "";
 
   return `<!DOCTYPE html>
 <html lang="uk">
@@ -970,6 +1487,22 @@ export function generateSheathingNestingPDFHTML(
         </tbody>
       </table>
 
+      <!-- CONVERTED WINDOWS PASSPORT CARD -->
+      ${hasWindowSheets ? `
+      <div style="background: #F0F9FF; border: 1.5px solid #BAE6FD; border-radius: 8px; padding: 10px 14px; margin-top: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <div style="font-weight: 800; font-size: 11px; color: #0369A1;">
+            🪟 ОБ'ЄКТИ КОНВЕРТАЦІЇ «ВІКНО» (РОЗКРІЙ ПЛАСТИКУ / СКЛА):
+          </div>
+          <span style="font-size: 10px; font-weight: 700; background: #E0F2FE; color: #0284C7; padding: 2px 8px; border-radius: 4px;">
+            Віконних деталей: ${windowNesting.totalPanels} шт · Додатково ${windowNesting.totalSheetsRequired} лист. (${windowNesting.sheetWidth}×${windowNesting.sheetHeight} мм)
+          </span>
+        </div>
+        <div style="font-size: 10px; color: #0C4A6E; line-height: 1.45;">
+          ${windowNesting.totalPanels} граней каркасу купола вилучено з розкрою фанери та сформовано в окремий аркуш розкрою під пластик або скло (сумарна площа ${windowNesting.domeSurfaceAreaM2} м², довжина різу ${windowNesting.totalLinearCutMeters} м). В кінці цього альбому додано відповідні векторні карти розкрою віконних панелей.
+        </div>
+      </div>` : ''}
+
       <!-- TECHNICAL INSTRUCTIONS FOR OPERATOR -->
       <div class="tech-box">
         <div class="tech-title">ТЕХНОЛОГІЧНІ ВКАЗІВКИ ДЛЯ ОПЕРАТОРА ЧПУ ВЕРСТАТА:</div>
@@ -992,6 +1525,9 @@ export function generateSheathingNestingPDFHTML(
 
   <!-- SUBSEQUENT PAGES: VECTOR CNC SHEETS -->
   ${sheetPagesHtml}
+
+  <!-- CONVERTED WINDOWS VECTOR CNC SHEETS -->
+  ${windowSheetPagesHtml}
 
   <script>
     window.addEventListener("load", function() {

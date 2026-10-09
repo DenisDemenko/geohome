@@ -17,11 +17,16 @@ export const DEFAULT_CONNECTOR_PARAMS: ConnectorParams = {
   tabLength: 95, // mm ray/tab length (2 - 300 mm)
   tabWidth: 45, // mm ray/tab width (1.5 - 150 mm)
   thickness: 4.0, // mm steel plate
+  wallThickness: 2.5, // mm wall thickness for round tubular connector sleeves & central hub body
+  rayType: "auto", // "auto" (follows beam type: round tube for circular beams, plate for rectangular) | "round_tube" | "plate"
   boltDiameter: 10, // M10
   boltDistance: 35, // mm
   boltHoleCount: 2,
   centerCutout: "lightning", // Thunder Domes style lightning bolt cutout
   material: "steel_st3",
+  materialCategory: "steel",
+  coating: "hot_dip_galvanized",
+  plasticInfillPercent: 100,
   autoProportional: true
 };
 
@@ -60,6 +65,12 @@ export function getProportionalConnectorParams(
     Math.round((0.8 + (baseParams.thickness - 0.8) * Math.pow(t, 0.65)) * 10) / 10
   );
 
+  // Wall thickness for round connector sleeves: scales from 0.6 mm to 3.0 mm
+  const wallThickness = Math.max(
+    0.5,
+    Math.round((0.6 + ((baseParams.wallThickness || 2.5) - 0.6) * Math.pow(t, 0.65)) * 10) / 10
+  );
+
   // Standard metric fastener selection based on scale
   let boltDiameter: number;
   if (diameterMm < 220) {
@@ -86,6 +97,7 @@ export function getProportionalConnectorParams(
     tabLength,
     tabWidth,
     thickness,
+    wallThickness,
     boltDiameter,
     boltDistance,
     autoProportional: true
@@ -169,7 +181,13 @@ export function calculateConnector(
     const u = dot(dir, refU);
     const v = dot(dir, refV);
     let ang = (Math.atan2(v, u) * 180) / Math.PI;
-    if (!node.boundary && ang < 0) ang += 360;
+    if (ang < 0) ang += 360;
+    if (node.boundary) {
+      // In boundary nodes, beams lie in the upper half-plane (v >= 0) or along the ground (v ~= 0).
+      // Floating-point error can give slight negative v for horizontal ground struts, causing ang ~ 359 or ang ~ 181.
+      if (ang > 350) ang = 0;
+      else if (ang > 175 && ang < 195) ang = 180;
+    }
 
     return {
       edgeId,
@@ -183,7 +201,7 @@ export function calculateConnector(
     } as any;
   });
 
-  // Sort beams by planar angle
+  // Sort beams by planar angle counter-clockwise
   beams.sort((a: any, b: any) => a.planarAngle - b.planarAngle);
 
   // If node is boundary, normalize planar angles to range [0, 180] from right to left
@@ -247,14 +265,24 @@ export function classifyConnectorTypes(
   const summaries: ConnectorTypeSummary[] = [];
   let hexCounter = 1;
   let baseCounter = 1;
+  let plinthBaseCounter = 1;
+  let plinthRingCounter = 1;
 
   for (const [key, data] of groupsMap.entries()) {
     const sampleConn = calculateConnector(model, data.sampleNodeId);
+    const sampleNode = model.nodes[data.sampleNodeId];
     const rayCount = sampleConn.beams.length;
     const isBase = sampleConn.isBoundary;
+    const isPlinthGround = Boolean(sampleNode?.isPlinthGroundNode);
+    const isPlinthTop = Boolean(sampleNode?.isPlinthTopNode);
+    const isPlinth = isPlinthGround || isPlinthTop;
 
     let typeName = "";
-    if (isBase) {
+    if (isPlinthGround) {
+      typeName = `${rayCount}-променевий Опорний вузол цоколя (Plinth Base #${plinthBaseCounter++})`;
+    } else if (isPlinthTop) {
+      typeName = `${rayCount}-променевий Пояс купола / цоколя (Dome-Plinth Transition #${plinthRingCounter++})`;
+    } else if (isBase) {
       typeName = `${rayCount}-променевий Опорний основи (Base Bracket #${baseCounter++})`;
     } else if (rayCount === 5) {
       typeName = "5-променевий Apex / Пентагон (5-Way Star)";
@@ -306,6 +334,9 @@ export function classifyConnectorTypes(
       name: typeName,
       rayCount,
       isBoundary: isBase,
+      isPlinth,
+      isPlinthGround,
+      isPlinthTop,
       countInDome: data.nodeIds.length,
       nodeIds: data.nodeIds,
       beamSignature: beams.map(b => b.beamType).join(" - "),
@@ -516,6 +547,8 @@ export function generateConnectorCutPattern(
     rxR: { x: number; y: number };
     vX: number;
     vY: number;
+    angCur: number;
+    angNext: number;
   }
 
   const rayPoints: RayPoints[] = [];
@@ -523,7 +556,7 @@ export function generateConnectorCutPattern(
   for (let i = 0; i < rayCount; i++) {
     const beam = sortedBeams[i];
     const nextBeam = sortedBeams[(i + 1) % rayCount];
-    const rad = (((beam as any).planarAngle || (i * 360) / rayCount) * Math.PI) / 180;
+    const rad = (((beam as any).planarAngle !== undefined ? (beam as any).planarAngle : (i * 360) / rayCount) * Math.PI) / 180;
     const cosA = Math.cos(rad);
     const sinA = Math.sin(rad);
     const perpX = -sinA;
@@ -534,81 +567,81 @@ export function generateConnectorCutPattern(
     const txL = { x: cosA * totalRadius - perpX * tabHalfW, y: sinA * totalRadius - perpY * tabHalfW };
     const txR = { x: cosA * totalRadius + perpX * tabHalfW, y: sinA * totalRadius + perpY * tabHalfW };
 
-    const angCur = (beam as any).planarAngle || (i * 360) / rayCount;
-    let angNext = (nextBeam as any).planarAngle || (((i + 1) % rayCount) * 360) / rayCount;
-    if (!isBase && angNext <= angCur) angNext += 360;
+    const angCur = (beam as any).planarAngle !== undefined ? (beam as any).planarAngle : (i * 360) / rayCount;
+    let angNext = (nextBeam as any).planarAngle !== undefined ? (nextBeam as any).planarAngle : (((i + 1) % rayCount) * 360) / rayCount;
+    if (angNext <= angCur) angNext += 360;
     const midAngleRad = ((angCur + angNext) / 2) * (Math.PI / 180);
 
     const valleyR = Math.max(0.8, hubRadius * 0.72);
     const vX = Math.cos(midAngleRad) * valleyR;
     const vY = Math.sin(midAngleRad) * valleyR;
 
-    rayPoints.push({ rxL, txL, txR, rxR, vX, vY });
+    rayPoints.push({ rxL, txL, txR, rxR, vX, vY, angCur, angNext });
   }
 
-  // Construct closed CNC laser-cutting outer curve
-  let d = "";
-
+  // Anchor mounting holes on foundation bracket hubs
   if (isBase) {
-    // BASE BRACKET: Flat bottom horizontal sill flange resting on foundation
-    const first = rayPoints[0];
-    const last = rayPoints[rayCount - 1];
-    const sillY = -hubRadius * 0.45;
-
-    // Foundation anchor bolt holes on bottom sill
+    const anchorY = -hubRadius * 0.45;
     boltHoles.push({
-      x: -hubRadius * 0.5,
-      y: sillY * 0.4,
+      x: -hubRadius * 0.45,
+      y: anchorY,
       diameter: params.boltDiameter || 10,
       edgeId: -1,
       type: "Anchor"
     });
     boltHoles.push({
-      x: hubRadius * 0.5,
-      y: sillY * 0.4,
+      x: hubRadius * 0.45,
+      y: anchorY,
       diameter: params.boltDiameter || 10,
       edgeId: -2,
       type: "Anchor"
     });
-
-    // Start at bottom sill left
-    d += `M ${(-hubRadius * 0.85).toFixed(2)} ${sillY.toFixed(2)} `;
-    // Up to first ray tab left root
-    d += `L ${first.rxL.x.toFixed(2)} ${first.rxL.y.toFixed(2)} `;
-
-    for (let i = 0; i < rayCount; i++) {
-      const cur = rayPoints[i];
-      d += `L ${cur.txL.x.toFixed(2)} ${cur.txL.y.toFixed(2)} `;
-      d += `L ${cur.txR.x.toFixed(2)} ${cur.txR.y.toFixed(2)} `;
-      d += `L ${cur.rxR.x.toFixed(2)} ${cur.rxR.y.toFixed(2)} `;
-
-      if (i < rayCount - 1) {
-        const next = rayPoints[i + 1];
-        d += `Q ${cur.vX.toFixed(2)} ${cur.vY.toFixed(2)}, ${next.rxL.x.toFixed(2)} ${next.rxL.y.toFixed(2)} `;
-      }
-    }
-
-    // Down from last ray right root to bottom sill right
-    d += `L ${(hubRadius * 0.85).toFixed(2)} ${sillY.toFixed(2)} `;
-    // Straight horizontal line along foundation sill back to start
-    d += `Z`;
-  } else {
-    // DOME INTERNAL HUB (Apex & Hexagons): Full 360° closed star
-    for (let i = 0; i < rayCount; i++) {
-      const cur = rayPoints[i];
-      const next = rayPoints[(i + 1) % rayCount];
-
-      if (i === 0) {
-        d += `M ${cur.rxL.x.toFixed(2)} ${cur.rxL.y.toFixed(2)} `;
-      }
-
-      d += `L ${cur.txL.x.toFixed(2)} ${cur.txL.y.toFixed(2)} `;
-      d += `L ${cur.txR.x.toFixed(2)} ${cur.txR.y.toFixed(2)} `;
-      d += `L ${cur.rxR.x.toFixed(2)} ${cur.rxR.y.toFixed(2)} `;
-      d += `Q ${cur.vX.toFixed(2)} ${cur.vY.toFixed(2)}, ${next.rxL.x.toFixed(2)} ${next.rxL.y.toFixed(2)} `;
-    }
-    d += "Z";
   }
+
+  // Construct 100% closed CNC laser-cutting outer curve for all connectors (4-, 5-, 6-petal)
+  let d = "";
+
+  for (let i = 0; i < rayCount; i++) {
+    const cur = rayPoints[i];
+    const next = rayPoints[(i + 1) % rayCount];
+
+    if (i === 0) {
+      d += `M ${cur.rxL.x.toFixed(2)} ${cur.rxL.y.toFixed(2)} `;
+    }
+
+    d += `L ${cur.txL.x.toFixed(2)} ${cur.txL.y.toFixed(2)} `;
+    d += `L ${cur.txR.x.toFixed(2)} ${cur.txR.y.toFixed(2)} `;
+    d += `L ${cur.rxR.x.toFixed(2)} ${cur.rxR.y.toFixed(2)} `;
+
+    const delta = cur.angNext - cur.angCur;
+    if (delta <= 110) {
+      // Standard inter-petal valley
+      d += `Q ${cur.vX.toFixed(2)} ${cur.vY.toFixed(2)}, ${next.rxL.x.toFixed(2)} ${next.rxL.y.toFixed(2)} `;
+    } else {
+      // Wide gap (e.g. bottom of 4-petal base bracket): smoothly trace the closed circular hub circumference
+      const N = Math.max(2, Math.ceil(delta / 65));
+      for (let k = 0; k < N; k++) {
+        const thA = cur.angCur + (k * delta) / N;
+        const thB = cur.angCur + ((k + 1) * delta) / N;
+        const thMid = (thA + thB) / 2;
+        const halfSpanRad = ((thB - thA) / 2) * (Math.PI / 180);
+        const rCtrl = hubRadius / Math.cos(halfSpanRad);
+        const cx = Math.cos(thMid * (Math.PI / 180)) * rCtrl;
+        const cy = Math.sin(thMid * (Math.PI / 180)) * rCtrl;
+
+        let endX: number, endY: number;
+        if (k === N - 1) {
+          endX = next.rxL.x;
+          endY = next.rxL.y;
+        } else {
+          endX = Math.cos(thB * (Math.PI / 180)) * hubRadius;
+          endY = Math.sin(thB * (Math.PI / 180)) * hubRadius;
+        }
+        d += `Q ${cx.toFixed(2)} ${cy.toFixed(2)}, ${endX.toFixed(2)} ${endY.toFixed(2)} `;
+      }
+    }
+  }
+  d += "Z";
 
   return {
     nodeId: connector.nodeId,

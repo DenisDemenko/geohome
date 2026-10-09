@@ -103,15 +103,14 @@ export const BeamBlueprintsPanel: React.FC<BeamBlueprintsPanelProps> = ({
   };
 
   const netCut =
-    activeGroup.cutLength || Math.max(10, Math.round(activeGroup.length - hubDiam));
+  activeGroup.cutLength || Math.max(10, Math.round(activeGroup.length - hubDiam));
   const linearM = Math.round(((netCut * activeGroup.count) / 1000) * 10) / 10;
-  const volM3 =
-    Math.round(
-      linearM *
-        (model.beamProfile.width / 1000) *
-        (model.beamProfile.depth / 1000) *
-        100
-    ) / 100;
+  const isRound = model.beamProfile.type === "circular" || model.beamProfile.type === "pipe";
+  const dVal = model.beamProfile.diameter || model.beamProfile.width;
+  const crossAreaM2 = isRound
+    ? (Math.PI / 4) * Math.pow(dVal / 1000, 2)
+    : (model.beamProfile.width / 1000) * (model.beamProfile.depth / 1000);
+  const volM3 = Math.round(linearM * crossAreaM2 * 100) / 100;
   const weightKg = Math.round(volM3 * model.beamProfile.density);
 
   return (
@@ -418,9 +417,9 @@ export const BeamBlueprintsPanel: React.FC<BeamBlueprintsPanelProps> = ({
                   </span>
                 </div>
                 <div className="flex justify-between items-baseline">
-                  <span className="text-xs text-[#5A6778]">Переріз бруса:</span>
+                  <span className="text-xs text-[#5A6778]">{isRound ? "Переріз балки:" : "Переріз бруса:"}</span>
                   <span className="font-mono font-bold text-xs text-[#1A2E3B]">
-                    {model.beamProfile.width} × {model.beamProfile.depth} мм
+                    {isRound ? `Круглий Ø ${dVal} мм` : `${model.beamProfile.width} × ${model.beamProfile.depth} мм`}
                   </span>
                 </div>
                 <div className="flex justify-between items-baseline pt-1 border-t border-[#E8E2D8]">

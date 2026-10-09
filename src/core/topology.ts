@@ -48,7 +48,10 @@ const FACE_PALETTE = [
 export function buildTopology(
   vertices: Vec3[],
   rawFaces: { a: number; b: number; c: number }[],
-  cutPlaneZ: number
+  cutPlaneZ: number,
+  outerOffset = 0,
+  sphereCenterZ = 0,
+  sphereRadius = 0
 ): Topology {
   const nodes: Node[] = vertices.map((position, id) => ({
     id,
@@ -207,6 +210,27 @@ export function buildTopology(
     });
   });
 
+  // Assign unique engineering node markings: [BeamTypeLetters][UniqueOrderNumber]
+  // e.g. "AA1", "AA2", "AB3", where letters denote the breakdown strut types meeting at the node,
+  // and the number is strictly unique relative to the entire dome (1, 2, ... N, never repeating).
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const connectedTypes = Array.from(
+      new Set(node.edges.map(eid => edges[eid]?.type).filter(Boolean))
+    ).sort();
+
+    let prefix = "AA";
+    if (connectedTypes.length === 1) {
+      // Uniform node (e.g. apex or 5-way pentagon hubs: only A-struts) -> e.g. "AA"
+      prefix = `${connectedTypes[0]}${connectedTypes[0]}`;
+    } else if (connectedTypes.length >= 2) {
+      // Mixed node (e.g. connecting A & B, or B & C) -> e.g. "AB", "BC"
+      prefix = `${connectedTypes[0]}${connectedTypes[1]}`;
+    }
+    node.nodeType = prefix;
+    node.label = `${prefix}${i + 1}`;
+  }
+
   // Calculate face types (e.g. "AAB", "ABC")
   const faceGroupMap = new Map<string, { count: number; faceIds: number[]; sampleFace: Face }>();
 
@@ -229,15 +253,28 @@ export function buildTopology(
   const faceGroups: FaceTypeGroup[] = [];
   let faceColorIdx = 0;
 
+  const getOuterVertex = (p: Vec3): Vec3 => {
+    if (outerOffset <= 0) return p;
+    const rx = p.x;
+    const ry = p.y;
+    const rz = p.z - sphereCenterZ;
+    const rLen = Math.hypot(rx, ry, rz) || sphereRadius || 1;
+    return {
+      x: p.x + (rx / rLen) * outerOffset,
+      y: p.y + (ry / rLen) * outerOffset,
+      z: p.z + (rz / rLen) * outerOffset
+    };
+  };
+
   for (const [key, val] of faceGroupMap.entries()) {
     const sample = val.sampleFace;
-    const pA = vertices[sample.a];
-    const pB = vertices[sample.b];
-    const pC = vertices[sample.c];
+    const pA = getOuterVertex(vertices[sample.a]);
+    const pB = getOuterVertex(vertices[sample.b]);
+    const pC = getOuterVertex(vertices[sample.c]);
 
-    const lenA = distance(pB, pC); // side opposite to A
-    const lenB = distance(pC, pA); // side opposite to B
-    const lenC = distance(pA, pB); // side opposite to C
+    const lenA = distance(pB, pC); // side opposite to A (on outer face of struts)
+    const lenB = distance(pC, pA); // side opposite to B (on outer face of struts)
+    const lenC = distance(pA, pB); // side opposite to C (on outer face of struts)
 
     const angles = triangleInteriorAngles(lenA, lenB, lenC);
     const areaM2 = (triangleArea(pA, pB, pC)) / 1_000_000;

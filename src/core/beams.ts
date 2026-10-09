@@ -50,11 +50,101 @@ export const DEFAULT_BEAM_PROFILES: BeamProfile[] = [
     bendingStrength: 28
   },
   {
+    name: "Дерев'яний кругляк Ø 50 мм (Сосна С24)",
+    width: 50,
+    depth: 50,
+    diameter: 50,
+    type: "circular",
+    material: "pine",
+    density: 500,
+    elasticModulus: 11000,
+    bendingStrength: 24
+  },
+  {
+    name: "Дерев'яний кругляк Ø 30 мм (Бук калібрований)",
+    width: 30,
+    depth: 30,
+    diameter: 30,
+    type: "circular",
+    material: "beech",
+    density: 680,
+    elasticModulus: 13000,
+    bendingStrength: 30
+  },
+  {
+    name: "Дерев'яний кругляк Ø 20 мм (Шкант / Сосна)",
+    width: 20,
+    depth: 20,
+    diameter: 20,
+    type: "circular",
+    material: "pine",
+    density: 500,
+    elasticModulus: 10500,
+    bendingStrength: 22
+  },
+  {
+    name: "Дерев'яний стрижень Ø 12 мм (Моделі / Бамбук)",
+    width: 12,
+    depth: 12,
+    diameter: 12,
+    type: "circular",
+    material: "pine",
+    density: 480,
+    elasticModulus: 10000,
+    bendingStrength: 20
+  },
+  {
+    name: "Дерев'яний стрижень Ø 6 мм (Шпонка / Макет)",
+    width: 6,
+    depth: 6,
+    diameter: 6,
+    type: "circular",
+    material: "pine",
+    density: 450,
+    elasticModulus: 9500,
+    bendingStrength: 18
+  },
+  {
     name: "Сталева кругла труба Ø 48 × 3.0 мм (Ст3)",
     width: 48,
     depth: 48,
+    diameter: 48,
     wallThickness: 3.0,
     type: "pipe",
+    material: "steel",
+    density: 7850,
+    elasticModulus: 206000,
+    bendingStrength: 235
+  },
+  {
+    name: "Алюмінієва трубка Ø 25 × 1.5 мм (АД31Т1)",
+    width: 25,
+    depth: 25,
+    diameter: 25,
+    wallThickness: 1.5,
+    type: "pipe",
+    material: "aluminum",
+    density: 2700,
+    elasticModulus: 70000,
+    bendingStrength: 150
+  },
+  {
+    name: "Сталевий прут Ø 10 мм (Каліброване коло Ст3)",
+    width: 10,
+    depth: 10,
+    diameter: 10,
+    type: "circular",
+    material: "steel",
+    density: 7850,
+    elasticModulus: 206000,
+    bendingStrength: 235
+  },
+  {
+    name: "Сталевий прут Ø 4 мм (Сталевий дріт / Макет)",
+    width: 4,
+    depth: 4,
+    diameter: 4,
+    type: "circular",
     material: "steel",
     density: 7850,
     elasticModulus: 206000,
@@ -105,12 +195,24 @@ export const DEFAULT_BEAM_PROFILES: BeamProfile[] = [
     name: "Трубка Ø 3 × 0.5 мм (Латунь / Алюміній / Моделі)",
     width: 3,
     depth: 3,
+    diameter: 3,
     wallThickness: 0.5,
     type: "pipe",
     material: "aluminum",
     density: 2700,
     elasticModulus: 70000,
     bendingStrength: 150
+  },
+  {
+    name: "Мікро-пруток Ø 1 мм (Ювелірна сталь / Моделі)",
+    width: 1,
+    depth: 1,
+    diameter: 1,
+    type: "circular",
+    material: "steel",
+    density: 7850,
+    elasticModulus: 206000,
+    bendingStrength: 235
   }
 ];
 
@@ -193,11 +295,17 @@ export function analyzeBeamStructure(
     crossSectionAreaMm2 = b * h;
     sectionModulusWzMm3 = (b * Math.pow(h, 2)) / 6;
     momentOfInertiaIzMm4 = (b * Math.pow(h, 3)) / 12;
+  } else if (profile.type === "circular") {
+    // Solid circular cross-section (Кругляк / пруток / шкант)
+    const d = profile.diameter || profile.width;
+    crossSectionAreaMm2 = (Math.PI / 4) * d * d;
+    momentOfInertiaIzMm4 = (Math.PI / 64) * Math.pow(d, 4);
+    sectionModulusWzMm3 = (Math.PI / 32) * Math.pow(d, 3);
   } else {
-    // Pipe
-    const t = profile.wallThickness || 3;
-    const dOuter = profile.width;
-    const dInner = dOuter - 2 * t;
+    // Pipe / tube (Кругла трубка)
+    const dOuter = profile.diameter || profile.width;
+    const t = Math.min(profile.wallThickness || 3, dOuter * 0.45);
+    const dInner = Math.max(0.1, dOuter - 2 * t);
     crossSectionAreaMm2 = (Math.PI / 4) * (dOuter * dOuter - dInner * dInner);
     momentOfInertiaIzMm4 = (Math.PI / 64) * (Math.pow(dOuter, 4) - Math.pow(dInner, 4));
     sectionModulusWzMm3 = momentOfInertiaIzMm4 / (dOuter / 2);
