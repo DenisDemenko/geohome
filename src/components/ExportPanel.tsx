@@ -58,15 +58,19 @@ import {
   QrCode,
   Boxes,
   Coins,
-  Circle
+  Circle,
+  Film,
+  Camera,
+  Play
 } from "lucide-react";
 
 interface ExportPanelProps {
   model: DomeModel;
   selectedNodeId: NodeId | null;
+  onNavigateTo3D?: () => void;
 }
 
-export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId }) => {
+export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId, onNavigateTo3D }) => {
   const [isARModalOpen, setIsARModalOpen] = useState(false);
   const activeNodeId = selectedNodeId !== null ? selectedNodeId : model.nodes[0]?.id || 0;
   const activeNode = model.nodes.find(n => n.id === activeNodeId) || model.nodes[0];
@@ -397,6 +401,39 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId 
           <Printer className="w-4 h-4" />
           <span>Сформувати та відкрити PDF</span>
         </button>
+      </div>
+
+      {/* 3D Video & Motion Animation Presentation Card */}
+      <div className="p-5 rounded-3xl bg-gradient-to-r from-[#FAF7F2] via-white to-[#FFF7ED] border border-[#FDBA74] shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-start gap-3.5">
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center bg-[#FFEDD5] text-[#EA580C] shadow-xs shrink-0">
+            <Film className="w-6 h-6 text-[#EA580C]" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-sm font-bold text-[#1A2E3B]">
+                3D-відеопрезентація, кінематографічний тур та анімація для клієнтів
+              </h3>
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FFEDD5] text-[#9A3412] border border-[#FED7AA]">
+                WebM / MP4 / 4K Photo
+              </span>
+            </div>
+            <p className="text-xs text-[#5A6778] mt-1 max-w-xl">
+              Створення вражаючих презентаційних відеороликів: плавний 360° обліт камери, покроковий таймлапс збирання каркасу (етапи 1–8), динамічна вибух-схема розльоту обшивки та добовий хід сонця з титрами проекту.
+            </p>
+          </div>
+        </div>
+
+        {onNavigateTo3D && (
+          <button
+            type="button"
+            onClick={onNavigateTo3D}
+            className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold bg-[#EA580C] hover:bg-[#C2410C] text-white flex items-center justify-center gap-2 whitespace-nowrap shadow-xs cursor-pointer transition-all"
+          >
+            <Play className="w-4 h-4 fill-current" />
+            <span>Запустити 3D Відеостудію →</span>
+          </button>
+        )}
       </div>
 
       {/* 2D DXF EXPORTS FOR CNC CUTTING & MILLING (AutoCAD 2000 / Fusion 360 & R12) */}

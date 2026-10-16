@@ -21,8 +21,7 @@ import {
   DEFAULT_DOOR_PARAMS,
   DEFAULT_SOLAR_PARAMS,
   DEFAULT_INNER_SHEATHING_PARAMS,
-  findDoorNeighborFaces,
-  getDoorwayLevelingTier
+  findDoorNeighborFaces
 } from "./core/conversions";
 import { analyzeDomeSolar } from "./core/solarAnalysis";
 import { WindowGlazingParams } from "./core/types";
@@ -252,20 +251,6 @@ export default function App() {
       heightMm: height,
       doorFaceIds: captured
     }));
-
-    // Auto-enable Tier Leveling for tier 2 or 3 where door opening falls relative to 2nd floor horizon
-    const autoTier = getDoorwayLevelingTier(baseDome, anchorFaceId, height, captured);
-    setParams(prev => ({
-      ...prev,
-      tierLeveling: {
-        ...prev.tierLeveling,
-        [autoTier]: {
-          level: autoTier,
-          enabled: true,
-          radialMode: prev.tierLeveling?.[autoTier]?.radialMode || "vertical"
-        }
-      }
-    }));
   };
 
   const handleUpdateDoorParams = (newParams: Partial<DoorOpeningParams>) => {
@@ -283,23 +268,6 @@ export default function App() {
         );
         updated.doorFaceIds = captured;
         setDoorFaceIds(captured);
-
-        // Auto-enable tier leveling for tier 2 or 3 where door opening falls
-        const autoTier = getDoorwayLevelingTier(baseDome, updated.anchorFaceId, updated.heightMm, captured);
-        setParams(p => {
-          if (p.tierLeveling?.[autoTier]?.enabled) return p;
-          return {
-            ...p,
-            tierLeveling: {
-              ...p.tierLeveling,
-              [autoTier]: {
-                level: autoTier,
-                enabled: true,
-                radialMode: p.tierLeveling?.[autoTier]?.radialMode || "vertical"
-              }
-            }
-          };
-        });
       }
       return updated;
     });
@@ -382,49 +350,10 @@ export default function App() {
     }));
   };
 
-  // Generate Master Dome Model (structural geometry recomputes with tier leveling when door is attached)
+  // Generate Master Dome Model (structural geometry only recomputes when core dome geometry changes)
   const baseDomeModel = useMemo(() => {
-    return generateDome(
-      {
-        ...params,
-        doorFaceIds,
-        doorParams
-      },
-      beamProfile,
-      connectorParams,
-      sheathingParams
-    );
-  }, [params, doorFaceIds, doorParams, beamProfile, connectorParams, sheathingParams]);
-
-  // Ensure tier leveling is automatically enabled if a doorway opening is present
-  useEffect(() => {
-    if (doorFaceIds.length > 0 && doorParams.anchorFaceId !== undefined && baseDomeModel) {
-      const isLeveled = Boolean(
-        params.tierLeveling?.[2]?.enabled ||
-        params.tierLeveling?.[3]?.enabled ||
-        params.tierLeveling?.[4]?.enabled
-      );
-      if (!isLeveled) {
-        const autoTier = getDoorwayLevelingTier(
-          baseDomeModel,
-          doorParams.anchorFaceId,
-          doorParams.heightMm,
-          doorFaceIds
-        );
-        setParams(prev => ({
-          ...prev,
-          tierLeveling: {
-            ...prev.tierLeveling,
-            [autoTier]: {
-              level: autoTier,
-              enabled: true,
-              radialMode: prev.tierLeveling?.[autoTier]?.radialMode || "vertical"
-            }
-          }
-        }));
-      }
-    }
-  }, [doorFaceIds, doorParams.anchorFaceId, doorParams.heightMm, baseDomeModel]);
+    return generateDome(params, beamProfile, connectorParams, sheathingParams);
+  }, [params, beamProfile, connectorParams, sheathingParams]);
 
   // Combined Dome Model with user features (windows, doors, solar, inner sheathing)
   const domeModel = useMemo(() => {
@@ -659,7 +588,6 @@ export default function App() {
                 onCopyWindowsToFabricStrip={handleCopyWindowsToFabricStrip}
                 onClearFabricStrip={handleClearFabricStrip}
                 onNavigateToSheathing={() => setActiveTab("sheathing")}
-                onChangeParams={handleParamsChange}
               />
 
               {/* Real-time Inspector */}
@@ -722,8 +650,6 @@ export default function App() {
                 onSetSolarFaceIds={handleSetSolarFaceIds}
                 onChangeSolarParams={handleUpdateSolarParams}
                 solarAnalysis={solarAnalysis}
-                selectedNodeId={selectedNodeId}
-                onSelectNode={setSelectedNodeId}
               />
             </div>
           </div>
@@ -790,7 +716,11 @@ export default function App() {
 
         {/* Tab 9: CAD & CAM EXPORT (SVG, OBJ, STEP, STL) */}
         {activeTab === "export" && (
-          <ExportPanel model={domeModel} selectedNodeId={selectedNodeId} />
+          <ExportPanel
+            model={domeModel}
+            selectedNodeId={selectedNodeId}
+            onNavigateTo3D={() => setActiveTab("3d")}
+          />
         )}
       </main>
 

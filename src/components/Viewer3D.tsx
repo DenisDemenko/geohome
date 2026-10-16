@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
 import {
   DomeModel,
-  DomeParameters,
   NodeId,
   EdgeId,
   FaceId,
@@ -12,7 +11,7 @@ import {
   SolarGlazingParams,
   InnerSheathingParams
 } from "../core/types";
-import { PLYWOOD_MATERIALS, DEFAULT_SHEATHING_PARAMS, extractSheathingPanels, generateDomeTriangleStrips } from "../core/sheathing";
+import { PLYWOOD_MATERIALS, DEFAULT_SHEATHING_PARAMS, extractSheathingPanels } from "../core/sheathing";
 import {
   DEFAULT_WINDOW_PARAMS,
   GLAZING_OPTIONS,
@@ -72,12 +71,21 @@ import {
   CircleDot,
   Disc,
   Scissors,
-  EyeOff,
-  Palette
+  Film,
+  Camera,
+  User,
+  TreePine,
+  Moon,
+  Play,
+  Pause,
+  Square,
+  Video,
+  Download
 } from "lucide-react";
 import { ARModal } from "./ARModal";
+import { VideoExportModal, AnimationType, VideoExportOptions } from "./VideoExportModal";
 
-export type RenderMode = "beams" | "sheathing" | "hybrid" | "glass" | "tent" | "connectors" | "wireframe";
+export type RenderMode = "beams" | "sheathing" | "hybrid" | "glass" | "connectors" | "wireframe";
 
 // Distinct architectural palette for sheathing triangles
 export const SHEATHING_PALETTE = [
@@ -395,15 +403,6 @@ function getSolarEfficiencyBadgeTexture(
   return texture;
 }
 
-// Shared instances for window clamping bars to avoid heavy runtime allocations
-const sharedClampingGasketMat = new THREE.LineBasicMaterial({ color: 0x111111 });
-const sharedClampingBoltMat = new THREE.MeshStandardMaterial({
-  color: 0xDCE3EA,
-  metalness: 0.9,
-  roughness: 0.2
-});
-const sharedClampingBoltGeom = new THREE.CylinderGeometry(2.5, 2.5, 1.8, 8);
-
 /**
  * Creates an architectural extruded clamping frame bar along an edge of the triangle face
  */
@@ -477,23 +476,327 @@ function createClampingFrameBar(
 
   // EPDM Gasket line (black rubber seal between frame and glass)
   const gasketGeom = new THREE.BufferGeometry().setFromPoints([inner1, inner2]);
-  const gasketLine = new THREE.Line(gasketGeom, sharedClampingGasketMat);
+  const gasketMat = new THREE.LineBasicMaterial({ color: 0x111111, linewidth: 2 });
+  const gasketLine = new THREE.Line(gasketGeom, gasketMat);
   barGroup.add(gasketLine);
 
   // Stainless steel button head pressure plate screws along the bar
   const len = v1.distanceTo(v2);
   const boltCount = Math.max(2, Math.min(5, Math.floor(len / 400)));
+  const boltMat = new THREE.MeshStandardMaterial({
+    color: 0xDCE3EA,
+    metalness: 0.9,
+    roughness: 0.2
+  });
+  const boltRadius = Math.max(1.0, Math.min(4.5, frameW * 0.12));
+  const boltHeight = Math.max(0.8, boltRadius * 0.7);
+  const boltGeom = new THREE.CylinderGeometry(boltRadius, boltRadius, boltHeight, 8);
 
   for (let b = 1; b <= boltCount; b++) {
     const t = b / (boltCount + 1);
     const pOnBar = new THREE.Vector3().lerpVectors(topOuter1, topOuter2, t).addScaledVector(inward, frameW * 0.45);
-    const bolt = new THREE.Mesh(sharedClampingBoltGeom, sharedClampingBoltMat);
+    const bolt = new THREE.Mesh(boltGeom, boltMat);
     bolt.position.copy(pOnBar);
     bolt.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), faceNormal);
     barGroup.add(bolt);
   }
 
   return barGroup;
+}
+
+/**
+ * Stylized Architectural Silhouette Figure (1.80m / 1800mm tall)
+ * Provides instant real-world human scale reference for geodesic domes
+ */
+function buildHumanFigure(): THREE.Group {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x1E40AF, // Architectural deep cobalt
+    roughness: 0.45,
+    metalness: 0.15
+  });
+
+  // Base subtle ground shadow
+  const shadowGeom = new THREE.CylinderGeometry(280, 280, 2, 24);
+  shadowGeom.rotateX(Math.PI / 2);
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0x0F172A, transparent: true, opacity: 0.35 });
+  const shadow = new THREE.Mesh(shadowGeom, shadowMat);
+  shadow.position.z = 1;
+  group.add(shadow);
+
+  // Shoes / Feet
+  const shoeGeom = new THREE.BoxGeometry(85, 160, 40);
+  const shoeL = new THREE.Mesh(shoeGeom, mat);
+  shoeL.position.set(-80, 0, 20);
+  group.add(shoeL);
+  const shoeR = new THREE.Mesh(shoeGeom, mat);
+  shoeR.position.set(80, 0, 20);
+  group.add(shoeR);
+
+  // Legs
+  const legGeom = new THREE.CylinderGeometry(50, 40, 850, 12);
+  legGeom.rotateX(Math.PI / 2);
+  const legL = new THREE.Mesh(legGeom, mat);
+  legL.position.set(-80, 0, 460);
+  group.add(legL);
+  const legR = new THREE.Mesh(legGeom, mat);
+  legR.position.set(80, 0, 460);
+  group.add(legR);
+
+  // Pelvis / Hips
+  const pelvisGeom = new THREE.CylinderGeometry(145, 135, 190, 16);
+  pelvisGeom.rotateX(Math.PI / 2);
+  const pelvis = new THREE.Mesh(pelvisGeom, mat);
+  pelvis.position.set(0, 0, 980);
+  group.add(pelvis);
+
+  // Torso / Chest
+  const torsoGeom = new THREE.CylinderGeometry(175, 145, 430, 16);
+  torsoGeom.rotateX(Math.PI / 2);
+  const torso = new THREE.Mesh(torsoGeom, mat);
+  torso.position.set(0, 0, 1290);
+  group.add(torso);
+
+  // Arms
+  const armGeom = new THREE.CylinderGeometry(38, 32, 640, 10);
+  armGeom.rotateX(Math.PI / 2);
+  const armL = new THREE.Mesh(armGeom, mat);
+  armL.position.set(-215, 0, 1180);
+  group.add(armL);
+  const armR = new THREE.Mesh(armGeom, mat);
+  armR.position.set(215, 0, 1180);
+  group.add(armR);
+
+  // Neck
+  const neckGeom = new THREE.CylinderGeometry(55, 60, 85, 12);
+  neckGeom.rotateX(Math.PI / 2);
+  const neck = new THREE.Mesh(neckGeom, mat);
+  neck.position.set(0, 0, 1540);
+  group.add(neck);
+
+  // Head
+  const headGeom = new THREE.SphereGeometry(105, 16, 16);
+  const head = new THREE.Mesh(headGeom, mat);
+  head.position.set(0, 0, 1690);
+  group.add(head);
+
+  // Height Badge billboard
+  const badgeCanvas = document.createElement("canvas");
+  badgeCanvas.width = 144;
+  badgeCanvas.height = 54;
+  const bCtx = badgeCanvas.getContext("2d");
+  if (bCtx) {
+    bCtx.fillStyle = "#1E293B";
+    bCtx.beginPath();
+    bCtx.roundRect(4, 4, 136, 46, 12);
+    bCtx.fill();
+    bCtx.strokeStyle = "#38BDF8";
+    bCtx.lineWidth = 3;
+    bCtx.stroke();
+    bCtx.fillStyle = "#FFFFFF";
+    bCtx.font = "bold 22px system-ui, -apple-system, sans-serif";
+    bCtx.textAlign = "center";
+    bCtx.textBaseline = "middle";
+    bCtx.fillText("1.80 м", 72, 27);
+  }
+  const badgeTex = new THREE.CanvasTexture(badgeCanvas);
+  const badgeMat = new THREE.SpriteMaterial({ map: badgeTex });
+  const sprite = new THREE.Sprite(badgeMat);
+  sprite.position.set(0, 0, 1920);
+  sprite.scale.set(340, 128, 1);
+  group.add(sprite);
+
+  return group;
+}
+
+/**
+ * Natural environment landscape: green lawn ground disc and decorative low-poly trees
+ */
+function buildNatureLandscape(diameter: number): THREE.Group {
+  const group = new THREE.Group();
+  const radius = Math.max(10000, diameter * 2.5);
+
+  // Grass lawn circle
+  const lawnGeom = new THREE.CircleGeometry(radius, 64);
+  const lawnMat = new THREE.MeshStandardMaterial({
+    color: 0x486b46,
+    roughness: 0.92,
+    metalness: 0.04
+  });
+  const lawn = new THREE.Mesh(lawnGeom, lawnMat);
+  lawn.position.z = -2;
+  lawn.receiveShadow = true;
+  group.add(lawn);
+
+  // Outer natural forest perimeter ring (slightly darker green)
+  const ringGeom = new THREE.RingGeometry(radius * 0.75, radius * 1.3, 64);
+  const ringMat = new THREE.MeshStandardMaterial({
+    color: 0x2e4a30,
+    roughness: 0.95,
+    metalness: 0.02
+  });
+  const ring = new THREE.Mesh(ringGeom, ringMat);
+  ring.position.z = -1.8;
+  group.add(ring);
+
+  // Stylized decorative low-poly trees around perimeter
+  const treeCount = 18;
+  for (let i = 0; i < treeCount; i++) {
+    const angle = (i / treeCount) * Math.PI * 2 + 0.15;
+    const dist = radius * (0.85 + (i % 3) * 0.12);
+    const treeX = Math.cos(angle) * dist;
+    const treeY = Math.sin(angle) * dist;
+    const treeH = diameter * (0.35 + ((i * 7) % 5) * 0.08);
+    const treeR = diameter * 0.12;
+
+    const coneGeom = new THREE.ConeGeometry(treeR, treeH, 7);
+    coneGeom.rotateX(Math.PI / 2);
+    const coneMat = new THREE.MeshStandardMaterial({
+      color: i % 2 === 0 ? 0x244227 : 0x2e5232,
+      roughness: 0.85,
+      metalness: 0.05
+    });
+    const cone = new THREE.Mesh(coneGeom, coneMat);
+    cone.position.set(treeX, treeY, treeH * 0.5);
+    group.add(cone);
+  }
+
+  return group;
+}
+
+/**
+ * Applies lighting, background color, and environment objects based on theme
+ */
+function applyEnvironmentTheme(
+  theme: "studio" | "nature" | "sunset" | "night",
+  scene: THREE.Scene,
+  lights: {
+    ambient: THREE.AmbientLight;
+    dir1: THREE.DirectionalLight;
+    dir2: THREE.DirectionalLight;
+    interior: THREE.PointLight;
+  },
+  grid: THREE.GridHelper | null,
+  natureGroup: THREE.Group | null
+) {
+  if (theme === "studio") {
+    scene.background = new THREE.Color(0xf6f3ed);
+    lights.ambient.color.setHex(0xffffff);
+    lights.ambient.intensity = 0.85;
+    lights.dir1.color.setHex(0xfff6ea);
+    lights.dir1.intensity = 1.2;
+    lights.dir1.position.set(15000, 25000, 20000);
+    lights.dir2.color.setHex(0xdcebf5);
+    lights.dir2.intensity = 0.6;
+    lights.interior.intensity = 0;
+    if (grid) grid.visible = true;
+    if (natureGroup) natureGroup.visible = false;
+  } else if (theme === "nature") {
+    scene.background = new THREE.Color(0xbfe0f7); // Clear bright sky
+    lights.ambient.color.setHex(0xdcf0d8);
+    lights.ambient.intensity = 0.95;
+    lights.dir1.color.setHex(0xfffae0);
+    lights.dir1.intensity = 1.35;
+    lights.dir1.position.set(22000, 30000, 28000);
+    lights.dir2.color.setHex(0xbad7df);
+    lights.dir2.intensity = 0.55;
+    lights.interior.intensity = 0;
+    if (grid) grid.visible = false;
+    if (natureGroup) natureGroup.visible = true;
+  } else if (theme === "sunset") {
+    scene.background = new THREE.Color(0xd27552); // Sunset terracotta sky
+    lights.ambient.color.setHex(0x5e3725);
+    lights.ambient.intensity = 0.65;
+    lights.dir1.color.setHex(0xffa149);
+    lights.dir1.intensity = 1.8;
+    lights.dir1.position.set(38000, 8000, 5000); // Low golden hour sun
+    lights.dir2.color.setHex(0x6b3b5b);
+    lights.dir2.intensity = 0.4;
+    lights.interior.intensity = 0.8;
+    if (grid) grid.visible = false;
+    if (natureGroup) natureGroup.visible = true;
+  } else if (theme === "night") {
+    scene.background = new THREE.Color(0x0a0f1d); // Midnight navy
+    lights.ambient.color.setHex(0x18243c);
+    lights.ambient.intensity = 0.35;
+    lights.dir1.color.setHex(0x829ec7);
+    lights.dir1.intensity = 0.45;
+    lights.dir1.position.set(-15000, 20000, 25000); // Cool moonlight
+    lights.dir2.color.setHex(0x111b2b);
+    lights.dir2.intensity = 0.2;
+    lights.interior.intensity = 2.8; // Warm lantern inside the dome!
+    if (grid) grid.visible = false;
+    if (natureGroup) natureGroup.visible = true;
+  }
+}
+
+/**
+ * Draws professional title watermark and lower third on video canvas recording
+ */
+function drawTitleOverlay(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  model: DomeModel,
+  stepTitle?: string
+) {
+  const pad = 20;
+  const cardW = Math.min(width - pad * 2, 440);
+  const cardH = stepTitle ? 80 : 64;
+  const x = pad;
+  const y = height - cardH - pad;
+
+  ctx.save();
+  // Glassmorphic dark card
+  ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+  ctx.beginPath();
+  ctx.roundRect(x, y, cardW, cardH, 14);
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Color accent bar
+  ctx.fillStyle = "#DE7C5A";
+  ctx.beginPath();
+  ctx.roundRect(x + 4, y + 4, 4, cardH - 8, 2);
+  ctx.fill();
+
+  // Title text
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = "bold 14px system-ui, -apple-system, sans-serif";
+  ctx.fillText(
+    `КуполГео · V${model.parameters.frequency} · Ø${(model.parameters.diameter / 1000).toFixed(1)}м`,
+    x + 18,
+    y + 22
+  );
+
+  // Subtitle / Specs
+  const area = model.statistics?.floorAreaM2 || Math.round(Math.PI * Math.pow(model.parameters.diameter / 2000, 2) * 10) / 10;
+  const beams = model.statistics?.edges || model.edges.length;
+  const h = (model.parameters.height / 1000).toFixed(2);
+  ctx.fillStyle = "#94A3B8";
+  ctx.font = "11px system-ui, -apple-system, sans-serif";
+  ctx.fillText(`Площа: ${area} м² | Балки: ${beams} шт | Висота: ${h} м`, x + 18, y + 40);
+
+  if (stepTitle) {
+    ctx.fillStyle = "#FDE68A";
+    ctx.font = "bold 11px system-ui, -apple-system, sans-serif";
+    ctx.fillText(`▶ ${stepTitle}`, x + 18, y + 62);
+  }
+
+  // Top watermark
+  ctx.fillStyle = "rgba(15, 23, 42, 0.75)";
+  ctx.beginPath();
+  ctx.roundRect(width - 150 - pad, pad, 150, 30, 8);
+  ctx.fill();
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = "bold 11px system-ui, -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("🌐 КУПОЛГЕО 3D", width - 75 - pad, pad + 19);
+
+  ctx.restore();
 }
 
 interface Viewer3DProps {
@@ -533,7 +836,6 @@ interface Viewer3DProps {
   onCopyWindowsToFabricStrip?: () => void;
   onClearFabricStrip?: () => void;
   onNavigateToSheathing?: () => void;
-  onChangeParams?: (params: DomeParameters) => void;
 }
 
 export interface Display3DLayers {
@@ -542,7 +844,6 @@ export interface Display3DLayers {
   showOuterSheathing: boolean;
   showInnerSheathing: boolean;
   sheathingOpacity?: number;
-  showSecondFloorPlane?: boolean;
 }
 
 export const Viewer3D: React.FC<Viewer3DProps> = ({
@@ -581,8 +882,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
   onSetFabricStripFaceIds,
   onCopyWindowsToFabricStrip,
   onClearFabricStrip,
-  onNavigateToSheathing,
-  onChangeParams
+  onNavigateToSheathing
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -635,6 +935,73 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     return sheathingParams?.seamGapMm ?? model.sheathingParams?.seamGapMm ?? 0;
   });
   const [isARModalOpen, setIsARModalOpen] = useState<boolean>(false);
+
+  // Video Animation & Export Studio State
+  const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingProgress, setRecordingProgress] = useState(0);
+  const [recordedVideoUrl, setRecordedVideoUrl] = useState<string | null>(null);
+
+  // Dedicated 360° Circular Orbit Flyaround State
+  const [isOrbitActive, setIsOrbitActive] = useState<boolean>(false);
+  const [isOrbitPlaying, setIsOrbitPlaying] = useState<boolean>(false);
+  const [orbitSpeed, setOrbitSpeed] = useState<number>(1); // 0.5, 1, 2
+  const [orbitDirection, setOrbitDirection] = useState<1 | -1>(1); // 1 = clockwise, -1 = counter-clockwise
+  const [orbitAltitude, setOrbitAltitude] = useState<"medium" | "low" | "high" | "wave">("medium");
+  const [orbitRecordDuration, setOrbitRecordDuration] = useState<number>(10);
+  const [currentOrbitAngleDeg, setCurrentOrbitAngleDeg] = useState<number>(0);
+
+  const isOrbitActiveRef = useRef<boolean>(false);
+  const isOrbitPlayingRef = useRef<boolean>(false);
+  const orbitSpeedRef = useRef<number>(1);
+  const orbitDirectionRef = useRef<1 | -1>(1);
+  const orbitAltitudeRef = useRef<"medium" | "low" | "high" | "wave">("medium");
+
+  useEffect(() => {
+    isOrbitActiveRef.current = isOrbitActive;
+  }, [isOrbitActive]);
+  useEffect(() => {
+    isOrbitPlayingRef.current = isOrbitPlaying;
+  }, [isOrbitPlaying]);
+  useEffect(() => {
+    orbitSpeedRef.current = orbitSpeed;
+  }, [orbitSpeed]);
+  useEffect(() => {
+    orbitDirectionRef.current = orbitDirection;
+  }, [orbitDirection]);
+  useEffect(() => {
+    orbitAltitudeRef.current = orbitAltitude;
+  }, [orbitAltitude]);
+
+  // Exploded View (Вибух-схема) State
+  const [explodedProgress, setExplodedProgress] = useState(0);
+  const [isExplodedActive, setIsExplodedActive] = useState(false);
+  const [isExplodedPlaying, setIsExplodedPlaying] = useState(false);
+
+  // Architectural Human Scale Silhouette (1.80m)
+  const [showHumanScale, setShowHumanScale] = useState(false);
+
+  // Environment Lighting & Sky Theme: "studio" | "nature" | "sunset" | "night"
+  const [environmentTheme, setEnvironmentTheme] = useState<"studio" | "nature" | "sunset" | "night">("studio");
+
+  // Auxiliary refs for recording and 3D objects
+  const recordingStateRef = useRef<{
+    options: VideoExportOptions;
+    startTime: number;
+    startTheta: number;
+    startPhi: number;
+    mr: MediaRecorder;
+  } | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingCanvasRef = useRef<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null } | null>(null);
+
+  const humanGroupRef = useRef<THREE.Group | null>(null);
+  const natureGroupRef = useRef<THREE.Group | null>(null);
+  const interiorLightRef = useRef<THREE.PointLight | null>(null);
+  const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
+  const dirLight1Ref = useRef<THREE.DirectionalLight | null>(null);
+  const dirLight2Ref = useRef<THREE.DirectionalLight | null>(null);
 
   // Sync sheathing params from props
   useEffect(() => {
@@ -721,72 +1088,11 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       : (model.solarFaceIds || []);
   }, [solarFaceIds, model.solarFaceIds]);
 
-  const [selectedFabricStripIndex, setSelectedFabricStripIndex] = useState<number>(0);
-  const [tentShowFullDome, setTentShowFullDome] = useState<boolean>(false);
-  const [tentStripColor, setTentStripColor] = useState<string>("#D97706");
-  const [tentPanelMinimized, setTentPanelMinimized] = useState<boolean>(false);
-  const [tentShowPlinthBand, setTentShowPlinthBand] = useState<boolean>(false);
-  const [tentStripSelectionMode, setTentStripSelectionMode] = useState<"dome" | "plinth">("dome");
-
-  const isPlinthActive = Boolean(
-    model.parameters.plinth?.enabled &&
-    (model.statistics?.plinthHeightMm ?? model.parameters.plinth?.height ?? 0) > 0
-  );
-
-  const plinthFaceIds = useMemo(() => {
-    return model.faces.filter(f => f.isPlinthFace).map(f => f.id);
-  }, [model.faces]);
-
-  // Single uniform color options for the fabric cutting strip in 3D
-  const TENT_STRIP_COLORS = [
-    { id: "amber", name: "Бурштиновий", hex: "#D97706" },
-    { id: "blue", name: "Океанічний", hex: "#0284C7" },
-    { id: "emerald", name: "Смарагдовий", hex: "#059669" },
-    { id: "red", name: "Теракотовий", hex: "#DC2626" },
-    { id: "white", name: "Перлинно-білий", hex: "#E2E8F0" },
-  ];
-
-  // Stably memoize meridian dome strips based on structural parameters
-  const domeStrips = useMemo(() => {
-    return generateDomeTriangleStrips(model);
-  }, [model.parameters.frequency, model.parameters.diameter, model.parameters.height, model.parameters.cutType, model.faces.length]);
-
   const activeFabricStripFaceIds = useMemo(() => {
-    if (fabricStripFaceIds && fabricStripFaceIds.length > 0) {
-      return fabricStripFaceIds;
-    }
-    if (model.fabricStripFaceIds && model.fabricStripFaceIds.length > 0) {
-      return model.fabricStripFaceIds;
-    }
-    if (tentStripSelectionMode === "plinth" && plinthFaceIds.length > 0) {
-      return plinthFaceIds;
-    }
-    let baseIds: number[] = [];
-    if (domeStrips.length > 0) {
-      const idx = Math.min(Math.max(0, selectedFabricStripIndex), domeStrips.length - 1);
-      baseIds = domeStrips[idx] || [];
-    }
-    if (tentShowPlinthBand && plinthFaceIds.length > 0) {
-      return Array.from(new Set([...baseIds, ...plinthFaceIds]));
-    }
-    return baseIds;
-  }, [fabricStripFaceIds, model.fabricStripFaceIds, domeStrips, selectedFabricStripIndex, tentStripSelectionMode, plinthFaceIds, tentShowPlinthBand]);
-
-  const activeFabricStripKey = useMemo(() => {
-    return activeFabricStripFaceIds.join(",");
-  }, [activeFabricStripFaceIds]);
-
-  const activeWindowKey = useMemo(() => {
-    return activeWindowFaceIds.join(",");
-  }, [activeWindowFaceIds]);
-
-  const activeDoorKey = useMemo(() => {
-    return activeDoorFaceIds.join(",");
-  }, [activeDoorFaceIds]);
-
-  const activeSolarKey = useMemo(() => {
-    return activeSolarFaceIds.join(",");
-  }, [activeSolarFaceIds]);
+    return fabricStripFaceIds && fabricStripFaceIds.length > 0
+      ? fabricStripFaceIds
+      : (model.fabricStripFaceIds || []);
+  }, [fabricStripFaceIds, model.fabricStripFaceIds]);
 
   // Real-time solar orientation and insolation efficiency analysis
   const solarAnalysis = useMemo(() => {
@@ -1014,7 +1320,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     const camera = new THREE.PerspectiveCamera(45, width / height, 1, 200000);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
@@ -1025,18 +1331,32 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     container.innerHTML = "";
     container.appendChild(renderer.domElement);
 
+    // Set initial camera distance based on dome radius
+    const domeR = model.parameters.diameter / 2;
+    cameraSpherical.current.radius = domeR * 3.2;
+    targetCenter.current.set(0, 0, model.parameters.height * 0.45);
+
     // Soft Studio Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
     scene.add(ambientLight);
+    ambientLightRef.current = ambientLight;
 
     const dirLight1 = new THREE.DirectionalLight(0xfff6ea, 1.2);
     dirLight1.position.set(15000, 25000, 20000);
     dirLight1.castShadow = true;
     scene.add(dirLight1);
+    dirLight1Ref.current = dirLight1;
 
     const dirLight2 = new THREE.DirectionalLight(0xdcebf5, 0.6);
     dirLight2.position.set(-15000, -15000, 10000);
     scene.add(dirLight2);
+    dirLight2Ref.current = dirLight2;
+
+    // Warm Interior Point Light (active in night/sunset mode)
+    const interiorLight = new THREE.PointLight(0xF59E0B, 0, model.parameters.diameter * 2.5);
+    interiorLight.position.set(0, 0, model.parameters.height * 0.45);
+    scene.add(interiorLight);
+    interiorLightRef.current = interiorLight;
 
     // Subtle ground grid
     const groundGrid = new THREE.GridHelper(model.parameters.diameter * 2.2, 30, 0xcdc5b6, 0xe4ded3);
@@ -1045,14 +1365,23 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     scene.add(groundGrid);
     gridHelperRef.current = groundGrid;
 
+    // Human Scale Silhouette Figure (1.80m tall)
+    const humanGroup = buildHumanFigure();
+    humanGroup.position.set(domeR * 1.15, -domeR * 0.25, 0);
+    humanGroup.rotation.z = Math.PI * 0.6;
+    humanGroup.visible = showHumanScale;
+    scene.add(humanGroup);
+    humanGroupRef.current = humanGroup;
+
+    // Nature Environment Landscape (Lawn disc & stylized trees)
+    const natureGroup = buildNatureLandscape(model.parameters.diameter);
+    natureGroup.visible = environmentTheme !== "studio";
+    scene.add(natureGroup);
+    natureGroupRef.current = natureGroup;
+
     const group = new THREE.Group();
     scene.add(group);
     groupRef.current = group;
-
-    // Set initial camera distance based on dome radius
-    const domeR = model.parameters.diameter / 2;
-    cameraSpherical.current.radius = domeR * 3.2;
-    targetCenter.current.set(0, 0, model.parameters.height * 0.45);
 
     function updateCamera() {
       const { radius, theta, phi } = cameraSpherical.current;
@@ -1379,10 +1708,110 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     // Render loop
     const animate = () => {
       animFrameId.current = requestAnimationFrame(animate);
-      if (autoRotateRef.current && !isDraggingRef.current) {
+
+      // Active video recording driver (highest priority)
+      if (recordingStateRef.current && rendererRef.current && cameraRef.current) {
+        const { options, startTime, startTheta, startPhi, mr } = recordingStateRef.current;
+        const elapsed = (performance.now() - startTime) / 1000;
+        const progress = Math.min(1.0, elapsed / Math.max(1, options.durationSeconds));
+
+        setRecordingProgress(progress * 100);
+
+        let currentStepTitle: string | undefined;
+
+        if (options.type === "orbit_360") {
+          // Dynamic 360° circular orbit respecting selected rotation direction and altitude preset
+          cameraSpherical.current.theta = startTheta + progress * Math.PI * 2 * orbitDirectionRef.current;
+          const alt = orbitAltitudeRef.current;
+          if (alt === "low") {
+            cameraSpherical.current.phi = Math.PI * 0.46;
+          } else if (alt === "high") {
+            cameraSpherical.current.phi = Math.PI * 0.22;
+          } else if (alt === "wave") {
+            cameraSpherical.current.phi = Math.PI * 0.35 + Math.sin(progress * Math.PI * 2) * 0.12;
+          } else {
+            cameraSpherical.current.phi = Math.PI * 0.36;
+          }
+          updateCamera();
+        } else if (options.type === "assembly_timelapse") {
+          const stepIdx = Math.min(ASSEMBLY_STEPS.length - 1, Math.floor(progress * ASSEMBLY_STEPS.length));
+          const stepNum = ASSEMBLY_STEPS[stepIdx].step;
+          currentStepTitle = ASSEMBLY_STEPS[stepIdx].name;
+          handleSetAssemblyStep(stepNum);
+          cameraSpherical.current.theta += 0.006;
+          updateCamera();
+        } else if (options.type === "exploded_view") {
+          // Smooth radial oscillation 0 -> 1 -> 0
+          const exp = Math.sin(progress * Math.PI);
+          setExplodedProgress(exp);
+          cameraSpherical.current.theta += 0.005;
+          updateCamera();
+        } else if (options.type === "sun_path") {
+          if (dirLight1Ref.current) {
+            const sunAngle = progress * Math.PI;
+            dirLight1Ref.current.position.set(
+              Math.cos(sunAngle) * 35000,
+              Math.sin(sunAngle) * 35000,
+              Math.max(5000, Math.sin(sunAngle) * 25000)
+            );
+          }
+          cameraSpherical.current.theta += 0.003;
+          updateCamera();
+        }
+
+        // Live calculation of orbit degrees for radar
+        const rad = ((cameraSpherical.current.theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        setCurrentOrbitAngleDeg(Math.round((rad / (Math.PI * 2)) * 360));
+
+        renderer.render(scene, camera);
+
+        // Frame capture to recording canvas
+        if (recordingCanvasRef.current) {
+          const { ctx, canvas } = recordingCanvasRef.current;
+          if (ctx) {
+            ctx.drawImage(renderer.domElement, 0, 0);
+            if (options.includeTitleOverlay) {
+              drawTitleOverlay(ctx, canvas.width, canvas.height, model, currentStepTitle);
+            }
+          }
+        }
+
+        if (progress >= 1.0) {
+          if (mr.state === "recording") {
+            mr.stop();
+          }
+          recordingStateRef.current = null;
+          recordingCanvasRef.current = null;
+        }
+        return;
+      } else if (isOrbitActiveRef.current && isOrbitPlayingRef.current && !isDraggingRef.current) {
+        // Dedicated 360° Circular Orbit Flyaround
+        const step = 0.005 * orbitSpeedRef.current * orbitDirectionRef.current;
+        cameraSpherical.current.theta += step;
+
+        const alt = orbitAltitudeRef.current;
+        if (alt === "low") {
+          cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, Math.PI * 0.46, 0.06);
+        } else if (alt === "high") {
+          cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, Math.PI * 0.22, 0.06);
+        } else if (alt === "wave") {
+          const wavePhi = Math.PI * 0.35 + Math.sin(cameraSpherical.current.theta * 2) * 0.12;
+          cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, wavePhi, 0.06);
+        } else {
+          cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, Math.PI * 0.36, 0.06);
+        }
+
+        updateCamera();
+
+        const rad = ((cameraSpherical.current.theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        setCurrentOrbitAngleDeg(Math.round((rad / (Math.PI * 2)) * 360));
+      } else if (autoRotateRef.current && !isDraggingRef.current) {
         cameraSpherical.current.theta += 0.004;
         updateCamera();
+        const rad = ((cameraSpherical.current.theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        setCurrentOrbitAngleDeg(Math.round((rad / (Math.PI * 2)) * 360));
       }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -1621,27 +2050,18 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       renderMode === "beams" ||
       renderMode === "hybrid" ||
       renderMode === "wireframe" ||
-      renderMode === "tent" ||
-      conversionMode === "fabric_strip" ||
-      plywoodMaterial === "fabric_roll" ||
       assemblyState.isActive;
 
     const shouldRenderConnectors =
       showConnectors ||
       renderMode === "connectors" ||
-      renderMode === "hybrid" ||
-      renderMode === "tent" ||
-      conversionMode === "fabric_strip" ||
-      plywoodMaterial === "fabric_roll";
+      renderMode === "hybrid";
 
     const shouldRenderOuterSheathing =
       showOuterSheathing ||
       renderMode === "sheathing" ||
       renderMode === "hybrid" ||
       renderMode === "glass" ||
-      renderMode === "tent" ||
-      conversionMode === "fabric_strip" ||
-      plywoodMaterial === "fabric_roll" ||
       (assemblyState.isActive && assemblyVisibility.visibleFaceIds.size > 0);
 
     const shouldRenderInnerSheathing =
@@ -1776,7 +2196,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       const isMultiLayer = (shouldRenderOuterSheathing && (shouldRenderBeams || shouldRenderConnectors)) || (renderMode as string) === "hybrid" || assemblyState.isActive || (renderMode === "beams" && hasWindows);
       const isHybrid = isMultiLayer;
       const isGlass = renderMode === "glass" && !assemblyState.isActive;
-      const isTentMode = renderMode === "tent" || conversionMode === "fabric_strip" || plywoodMaterial === "fabric_roll";
       const groupIndexMap = new Map<string, number>();
       model.faceGroups.forEach((g, i) => groupIndexMap.set(g.type, i));
 
@@ -1784,74 +2203,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       const frameOption = WINDOW_FRAME_OPTIONS[windowParams?.frameColor || "anthracite"] || WINDOW_FRAME_OPTIONS.anthracite;
 
       // Shared materials & caches for fast face rendering without WebGL shader compilation lag
-      const glassMatCache = new Map<string, THREE.Material>();
-      const getGlassMat = (colorHex: string, opacity = 0.55, isSel = false): THREE.Material => {
-        const key = `glass_${colorHex}_${opacity}_${isSel}`;
-        let m = glassMatCache.get(key);
-        if (!m) {
-          m = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(isSel ? "#FFF3E0" : colorHex),
-            roughness: 0.08,
-            metalness: 0.12,
-            transparent: true,
-            opacity: isSel ? 0.8 : opacity,
-            side: THREE.DoubleSide,
-            depthWrite: false
-          });
-          glassMatCache.set(key, m);
-        }
-        return m;
-      };
-
-      const solarMatCache = new Map<string, THREE.Material>();
-      const getSolarMat = (isSel = false): THREE.Material => {
-        const key = `solar_${isSel}`;
-        let m = solarMatCache.get(key);
-        if (!m) {
-          m = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(isSel ? "#FFF3E0" : "#0F172A"),
-            emissive: new THREE.Color(isSel ? "#7C3AED" : "#0A192F"),
-            roughness: 0.2,
-            metalness: 0.8,
-            side: THREE.DoubleSide
-          });
-          solarMatCache.set(key, m);
-        }
-        return m;
-      };
-
-      const windowFrameMatCache = new Map<string, THREE.Material>();
-      const getWindowFrameMat = (colorHex: string, metalness: number, roughness: number, isSel = false): THREE.Material => {
-        const key = `${colorHex}_${metalness}_${roughness}_${isSel}`;
-        let m = windowFrameMatCache.get(key);
-        if (!m) {
-          m = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(isSel ? "#FF5722" : colorHex),
-            metalness,
-            roughness,
-            side: THREE.DoubleSide
-          });
-          windowFrameMatCache.set(key, m);
-        }
-        return m;
-      };
-
-      const windowRevealMatCache = new Map<string, THREE.Material>();
-      const getWindowRevealMat = (isSel = false): THREE.Material => {
-        const key = `reveal_${isSel}`;
-        let m = windowRevealMatCache.get(key);
-        if (!m) {
-          m = new THREE.MeshStandardMaterial({
-            color: isSel ? 0xFF5722 : 0xEDF2F7,
-            roughness: 0.75,
-            metalness: 0.05,
-            side: THREE.DoubleSide
-          });
-          windowRevealMatCache.set(key, m);
-        }
-        return m;
-      };
-
       const sheathingMatCache = new Map<string, THREE.Material>();
       const getSheathingMat = (colorHex: string, roughness: number, metalness: number, isTransp: boolean, opacity: number): THREE.Material => {
         const key = `${colorHex}_${roughness}_${metalness}_${isTransp}_${opacity.toFixed(2)}`;
@@ -2055,7 +2406,16 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
           const solarGeom = new THREE.BufferGeometry().setFromPoints([sA_out, sB_out, sC_out]);
           solarGeom.computeVertexNormals();
-          const solarMat = getSolarMat(isSelected);
+          const solarMat = new THREE.MeshPhysicalMaterial({
+            color: new THREE.Color(isSelected ? "#FFF3E0" : "#0F172A"),
+            emissive: new THREE.Color(isSelected ? "#7C3AED" : "#0A192F"),
+            roughness: 0.12,
+            metalness: 0.7,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.04,
+            reflectivity: 0.9,
+            side: THREE.DoubleSide
+          });
           const solarMesh = new THREE.Mesh(solarGeom, solarMat);
           solarMesh.userData = { type: "face", faceId: face.id, isSolar: true };
           windowsDoorsGroup.add(solarMesh);
@@ -2156,7 +2516,19 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           glassGeom.setAttribute("position", new THREE.BufferAttribute(glassVerts, 3));
           glassGeom.computeVertexNormals();
 
-          const glassMat = getGlassMat(glazing.tintColorHex, 0.55, isSelected);
+          const glassMat = new THREE.MeshPhysicalMaterial({
+            color: new THREE.Color(isSelected ? "#FFF3E0" : glazing.tintColorHex),
+            transmission: glazing.transmission || 0.88,
+            opacity: 0.92,
+            transparent: true,
+            roughness: glazing.roughness || 0.08,
+            metalness: 0.05,
+            ior: 1.52,
+            reflectivity: 0.85,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.04,
+            side: THREE.DoubleSide
+          });
           const glassMesh = new THREE.Mesh(glassGeom, glassMat);
           glassMesh.userData = { type: "face", faceId: face.id, isWindow: true };
           windowsDoorsGroup.add(glassMesh);
@@ -2165,7 +2537,12 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           // Inset ends so they NEVER touch, cover or convert the connector hub!
           const frameW = Math.max(2.5, Math.min(48, avgSide * 0.045));
           const frameH = Math.max(2.2, glassThick + 4);
-          const frameMat = getWindowFrameMat(frameOption.colorHex, frameOption.metalness, frameOption.roughness, isSelected);
+          const frameMat = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(isSelected ? "#FF5722" : frameOption.colorHex),
+            metalness: frameOption.metalness,
+            roughness: frameOption.roughness,
+            side: THREE.DoubleSide
+          });
 
           // 3 Extruded clamping bars (trimmed cleanly before node connector)
           const barAB = createClampingFrameBar(vA, vB, pCen, faceNormal, outwardOffset, frameW, frameH, frameMat, ringRadius);
@@ -2187,7 +2564,12 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           const ipC = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vC, pCen), inShrink).addScaledVector(faceNormal, inwardOffset);
 
           // Interior reveal jambs (відкоси між зовнішнім склом та внутрішньою обшивкою)
-          const revealMat = getWindowRevealMat(isSelected);
+          const revealMat = new THREE.MeshStandardMaterial({
+            color: isSelected ? 0xFF5722 : 0xEDF2F7, // Clean bright interior window reveal
+            roughness: 0.75,
+            metalness: 0.05,
+            side: THREE.DoubleSide
+          });
           const revealVerts = new Float32Array([
             // Quad AB
             gA.x, gA.y, gA.z,  gB.x, gB.y, gB.z,  ipB.x, ipB.y, ipB.z,
@@ -2246,12 +2628,14 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         const isFabricFace = activeFabricStripFaceIds.includes(face.id);
         const fabricSeq = isFabricFace ? activeFabricStripFaceIds.indexOf(face.id) + 1 : 0;
 
-        if (!shouldRenderOuterSheathing && (conversionMode !== "none" || windowMode || isSolarHeatmapOn || isFabricFace)) {
+        if (conversionMode !== "none" || windowMode || isSolarHeatmapOn || isFabricFace) {
           const previewGeom = new THREE.BufferGeometry().setFromPoints([vA, vB, vC]);
           previewGeom.computeVertexNormals();
           const previewColor =
             isFabricFace
               ? (isSelected ? 0xDC2626 : 0xD97706)
+              : conversionMode === "fabric_strip"
+              ? (isSelected ? 0xFF5722 : 0xF59E0B)
               : conversionMode === "door"
               ? (isSelected ? 0xFF5722 : 0xD97706)
               : conversionMode === "solar" || isSolarHeatmapOn
@@ -2260,7 +2644,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
           const previewMat = getPreviewMat(
             previewColor,
-            isSelected ? 0.65 : isFabricFace ? 0.95 : (isSolarHeatmapOn ? 0.55 : 0.09)
+            isSelected ? 0.55 : isFabricFace ? 0.65 : conversionMode === "fabric_strip" ? 0.15 : (isSolarHeatmapOn ? 0.55 : 0.09)
           );
           const previewMesh = new THREE.Mesh(previewGeom, previewMat);
           previewMesh.position.addScaledVector(faceNormal, outwardOffset);
@@ -2269,17 +2653,44 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
           const borderGeom = new THREE.BufferGeometry().setFromPoints([vA, vB, vC, vA]);
           const borderMat = getBorderLineMat(
-            isFabricFace ? 0xFFFFFF : isOptimalSolar ? 0xFDE047 : (typeof previewColor === "number" ? previewColor : 0x0284C7),
-            isFabricFace ? 3.5 : 1.2,
+            isFabricFace ? 0xB45309 : isOptimalSolar ? 0xFDE047 : (typeof previewColor === "number" ? previewColor : 0x0284C7),
+            isFabricFace ? 2.5 : 1.5,
             false,
-            isSelected ? 0.95 : isFabricFace ? 0.95 : 0.4
+            isSelected ? 0.95 : isFabricFace ? 0.95 : isOptimalSolar ? 0.95 : 0.4
           );
           const borderLine = new THREE.Line(borderGeom, borderMat);
           borderLine.position.addScaledVector(faceNormal, outwardOffset + 0.1);
           borderLine.userData = { type: "face", faceId: face.id };
           hitMeshesGroup.add(borderLine);
+
+          // Centroid badge sprite for Fabric Strip face
+          if (isFabricFace) {
+            const labelTex = getFabricStripLabelTexture(fabricSeq, face.type || `T${face.id}`, isSelected);
+            const spriteMat = getOrCreateSpriteMat(labelTex, `fabric_badge_${fabricSeq}_${face.type || `T${face.id}`}_${isSelected}`);
+            const sprite = new THREE.Sprite(spriteMat);
+            const spriteScale = Math.max(10, Math.min(220, avgSide * 0.25));
+            sprite.scale.set(spriteScale, spriteScale, 1);
+            sprite.position.copy(pCen).addScaledVector(faceNormal, outwardOffset + 3);
+            sprite.userData = { type: "face", faceId: face.id, isFabric: true };
+            hitMeshesGroup.add(sprite);
+          } else if (showTriangleLabels && isSolarHeatmapOn && solarMetric) {
+            // Centroid badge sprite showing solar efficiency
+            const labelTex = getSolarEfficiencyBadgeTexture(
+              face.type || `T${groupIdx + 1}`,
+              solarMetric.efficiencyPct,
+              Boolean(isOptimalSolar),
+              isSelected
+            );
+            const spriteMat = getOrCreateSpriteMat(labelTex, `solar_eff_${face.type || `T${groupIdx + 1}`}_${Math.round(solarMetric.efficiencyPct)}_${Boolean(isOptimalSolar)}_${isSelected}`);
+            const sprite = new THREE.Sprite(spriteMat);
+            const spriteScale = Math.max(8, Math.min(220, avgSide * 0.22));
+            sprite.scale.set(spriteScale, spriteScale, 1);
+            sprite.position.copy(pCen).addScaledVector(faceNormal, outwardOffset + 2);
+            sprite.userData = { type: "face", faceId: face.id };
+            hitMeshesGroup.add(sprite);
+          }
         } else {
-          // Invisible hit mesh so click/touch detects face accurately without z-fighting
+          // Invisible hit mesh so touch/click still detects face when sheathing is hidden
           const hitGeom = new THREE.BufferGeometry().setFromPoints([vA, vB, vC]);
           hitGeom.computeVertexNormals();
           const hitMesh = new THREE.Mesh(hitGeom, sharedInvisibleHitMat);
@@ -2288,13 +2699,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         }
 
         // 2. Volumetric Outer Sheathing Panel (added to outerSheathingGroup)
-        if (isTentMode && !isFabricFace && !tentShowFullDome) {
-          // In tent mode, if user did not request full translucent dome,
-          // do NOT render non-strip faces as sheathing!
-          // This keeps the 3D frame completely unobstructed so the tent mode never covers the 3D view.
-          continue;
-        }
-
         const gapMm = Math.max(0, Math.min(10, seamGapMm));
         let shrinkFactor = 1.0;
         if (gapMm > 0.001 && !isGlass) {
@@ -2310,7 +2714,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         const pB = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vB, pCen), shrinkFactor).addScaledVector(faceNormal, outwardOffset);
         const pC = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vC, pCen), shrinkFactor).addScaledVector(faceNormal, outwardOffset);
 
-        const panelThick = isFabricFace ? 1.5 : Math.max(0.5, plywoodThickness);
+        const panelThick = Math.max(0.5, plywoodThickness);
         const pA_in = pA;
         const pB_in = pB;
         const pC_in = pC;
@@ -2370,11 +2774,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           faceColorHex = solarMetric.heatmapColor;
         } else if (isGlass) {
           faceColorHex = "#88C4E0";
-        } else if (isFabricFace) {
-          // One single solid color for the entire cutting strip of fabric (Розкрой полоси тканини одним кольором!)
-          faceColorHex = tentStripColor;
-        } else if (isTentMode) {
-          faceColorHex = "#F1F5F9"; // Clean architectural pearl white tent membrane
         } else if (sheathingStyle === "plywood") {
           const woodTones = ["#DCA46A", "#DEAA72", "#E5B47F", "#D49C62", "#CFA06E"];
           faceColorHex = woodTones[groupIdx % woodTones.length];
@@ -2386,29 +2785,25 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         let edgeMat: THREE.Material;
 
         if (isGlass) {
-          mat = getGlassMat(faceColorHex, 0.45, isSelected);
+          mat = new THREE.MeshPhysicalMaterial({
+            color: new THREE.Color(faceColorHex),
+            transmission: 0.75,
+            opacity: 0.65,
+            transparent: true,
+            roughness: 0.15,
+            ior: 1.5,
+            side: THREE.DoubleSide
+          });
           edgeMat = mat;
-        } else if (isTentMode && !isFabricFace) {
-          // Delicate translucent membrane for remaining faces when full dome preview is toggled
-          // so it NEVER obscures or covers the 3D frame, struts, or opposite side
-          mat = getSheathingMat("#F1F5F9", 0.9, 0.02, true, 0.15);
-          edgeMat = getSheathingEdgeMat("#CBD5E1", true, 0.15);
         } else {
-          const isTransp = !isFabricFace && (isMultiLayer || isDimmed || shouldRenderInnerSheathing);
-          const panelOpacity = isDimmed
-            ? 0.18
-            : isFabricFace
-            ? 1.0 // Single solid vibrant color for the strip
-            : (isMultiLayer ? (sheathingOpacity ?? 0.85) : (shouldRenderInnerSheathing ? 0.80 : 1.0));
-          const matRoughness = isFabricFace ? 0.75 : (isTentMode ? 0.85 : (sheathingStyle === "plywood" ? 0.65 : 0.45));
-          mat = getSheathingMat(faceColorHex, matRoughness, 0.03, isTransp, panelOpacity);
+          const isTransp = isMultiLayer || isDimmed || shouldRenderInnerSheathing;
+          const panelOpacity = isDimmed ? 0.18 : (isMultiLayer ? (sheathingOpacity ?? 0.85) : (shouldRenderInnerSheathing ? 0.80 : 1.0));
+          mat = getSheathingMat(faceColorHex, sheathingStyle === "plywood" ? 0.65 : 0.45, 0.05, isTransp, panelOpacity);
 
-          // Realistic cut edge of plywood / veneer or fabric edge
+          // Realistic cut edge of plywood / veneer with slightly darker ply core
           const sideColor = isSelected
             ? "#FF5722"
-            : isFabricFace
-            ? (tentStripColor === "#D97706" ? "#B45309" : tentStripColor)
-            : (isTentMode ? "#E2E8F0" : (sheathingStyle === "plywood" ? "#8A542A" : "#36271A"));
+            : (sheathingStyle === "plywood" ? "#8A542A" : "#36271A");
           edgeMat = getSheathingEdgeMat(sideColor, isTransp, panelOpacity);
         }
 
@@ -2416,54 +2811,23 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         mesh.userData = { type: "face", faceId: face.id };
         outerSheathingGroup.add(mesh);
 
-        // Seam border contour for distinct triangle panel appearance (rectangles for plinth)
+        // Seam border contour for distinct triangle panel appearance
         if (!isGlass) {
+          const borderPoints = [pA_out, pB_out, pC_out, pA_out];
+          const borderGeom = new THREE.BufferGeometry().setFromPoints(borderPoints);
           const bColor = isSelected
             ? 0xFFFFFF
-            : isFabricFace
-            ? 0xFFFFFF // Crisp white border around the fabric cutting strip
-            : isTentMode
-            ? 0xCBD5E1 // Subtle seam line between tent panels
             : isOptimalSolar
             ? 0xFDE047 // Radiant golden highlight for optimal solar faces
             : isFiltered
             ? 0xDE7C5A
-            : (sheathingStyle === "plywood" ? 0x2A3845 : 0x2A3845);
-          const bWidth = isSelected ? 3 : isFabricFace ? 3.5 : (isTentMode ? 1.0 : 1.5);
-          const bOpacity = isDimmed ? 0.2 : (isOptimalSolar || isFabricFace) ? 1.0 : (isTentMode ? 0.55 : 0.85);
+            : 0x2A3845;
+          const bWidth = isSelected ? 3 : isOptimalSolar ? 3.5 : 1.5;
+          const bOpacity = isDimmed ? 0.2 : isOptimalSolar ? 0.95 : 0.85;
           const borderMat = getBorderLineMat(bColor, bWidth, isDimmed, bOpacity);
-
-          if (face.isPlinthFace) {
-            // Plinth: draw perimeter rectangle edges, omitting internal diagonal bracing seam
-            const segs: [THREE.Vector3, THREE.Vector3][] = [
-              [pA_out, pB_out],
-              [pB_out, pC_out],
-              [pC_out, pA_out]
-            ];
-            const nonDiagPoints: THREE.Vector3[] = [];
-            for (const [p1, p2] of segs) {
-              const isZ1Ground = p1.z <= 2.0;
-              const isZ2Ground = p2.z <= 2.0;
-              const isOneGround = isZ1Ground !== isZ2Ground;
-              const distXY = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-              const isDiagonal = isOneGround && distXY > 25.0;
-              if (!isDiagonal) {
-                nonDiagPoints.push(p1, p2);
-              }
-            }
-            if (nonDiagPoints.length > 0) {
-              const borderGeom = new THREE.BufferGeometry().setFromPoints(nonDiagPoints);
-              const borderLine = new THREE.LineSegments(borderGeom, borderMat);
-              borderLine.userData = { type: "face", faceId: face.id };
-              outerSheathingGroup.add(borderLine);
-            }
-          } else {
-            const borderPoints = [pA_out, pB_out, pC_out, pA_out];
-            const borderGeom = new THREE.BufferGeometry().setFromPoints(borderPoints);
-            const borderLine = new THREE.Line(borderGeom, borderMat);
-            borderLine.userData = { type: "face", faceId: face.id };
-            outerSheathingGroup.add(borderLine);
-          }
+          const borderLine = new THREE.Line(borderGeom, borderMat);
+          borderLine.userData = { type: "face", faceId: face.id };
+          outerSheathingGroup.add(borderLine);
 
           // Vertical thickness corner lines
           const cornerPoints = [
@@ -2478,17 +2842,12 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         }
 
         // 3D Centroid Badge Label for Triangle Type (Позначення типу на грані)
-        const isPlinthSecondary = face.isPlinthFace && (face.id % 2 === 1);
-        if (!isGlass && !isDimmed && !isPlinthSecondary && (conversionMode !== "fabric_strip" || isFabricFace)) {
+        if (!isGlass && !isDimmed) {
           const typeName = face.type || `T${groupIdx + 1}`;
-          const spriteKey = isFabricFace
-            ? `fabric_${fabricSeq}_${typeName}_${isSelected}`
-            : (isSolarHeatmapOn && solarMetric)
+          const spriteKey = (isSolarHeatmapOn && solarMetric)
             ? `solar_eff_${typeName}_${Math.round(solarMetric.efficiencyPct)}_${Boolean(isOptimalSolar)}_${isSelected}`
             : `${typeName}_${isSelected ? "#FF5722" : faceColorHex}_${isSelected ? "#FFF3E0" : "#FFFFFF"}`;
-          const labelTex = isFabricFace
-            ? getFabricStripLabelTexture(fabricSeq, face.type || "Тент", isSelected)
-            : (isSolarHeatmapOn && solarMetric)
+          const labelTex = (isSolarHeatmapOn && solarMetric)
             ? getSolarEfficiencyBadgeTexture(
                 typeName,
                 solarMetric.efficiencyPct,
@@ -2513,7 +2872,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         }
 
         // 3. Inner Sheathing (Interior lining: drywall, chipboard, OSB, plywood on inside face of struts)
-        if (!isGlass && !isTentMode) {
+        if (!isGlass) {
           const inwardOffset = -((effBeamDepth / 2) + 1.2);
           const inGapMm = Math.max(0, Math.min(10, innerSheathingParams?.seamGapMm ?? seamGapMm));
           let inShrink = 1.0;
@@ -2543,7 +2902,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     }
 
     // 2.5. Render 3D Rectangular Doorway Portal (Прямокутний дверний пройм, вписаний у декілька трикутників та утворює прохід у купол)
-    let doorTriResult: ReturnType<typeof calculateDoorwayTriangulationAndPanels> | null = null;
     if (activeDoorFaceIds.length > 0) {
       let anchorFaceId = doorParams?.anchorFaceId;
       if (anchorFaceId === undefined || !activeDoorFaceIds.includes(anchorFaceId)) {
@@ -2584,7 +2942,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         bayClusterType,
         clusterHubNodeId
       );
-      doorTriResult = triResult;
       if (triResult) {
         const portal = triResult.portal;
         const pGroup = new THREE.Group();
@@ -2909,14 +3266,14 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         28
       );
 
-      // Ray / Tab geometry with embedded overlap length into the central hub to ensure 100% monolithic connection
-      const effTabL = tabL + hubR * 0.45;
+      // Ray / Tab geometry:
+      // When round ray is active: cylindrical tubular socket sleeve!
+      // When rectangular beam / plate: flat rectangular blade / tab!
       const tabGeom = isRoundRay
-        ? new THREE.CylinderGeometry(rayOuterR, rayOuterR, effTabL, 20)
+        ? new THREE.CylinderGeometry(rayOuterR, rayOuterR, tabL, 20)
         : (isSpider
-          ? new THREE.BoxGeometry(tabW * 1.1, tabW * 0.6, effTabL)
-          : (isPipeHub ? new THREE.BoxGeometry(thk * 1.5, tabW * 0.9, effTabL) : new THREE.BoxGeometry(tabW, thk, effTabL)));
-      const rootBridgeGeom = new THREE.BoxGeometry(tabW, thk, hubR * 0.55);
+          ? new THREE.BoxGeometry(tabW * 1.1, tabW * 0.6, tabL)
+          : (isPipeHub ? new THREE.BoxGeometry(thk * 1.5, tabW * 0.9, tabL) : new THREE.BoxGeometry(tabW, thk, tabL)));
 
       const boltR = Math.max(0.3, Math.min(tabW * 0.16, (model.connectorParams.boltDiameter || 10) / 2));
       const boltGeom = new THREE.CylinderGeometry(boltR, boltR, isRoundRay ? rayOuterR * 2.3 : thk * 1.4, 8);
@@ -2972,7 +3329,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
         let steelColor = 0x6e7e8e; // Realistic galvanized plate steel
         if (isSelected) steelColor = 0xff4b2b;
-        else if (node.isTierLeveled) steelColor = 0x10b981; // emerald green for leveled 2nd floor tier
         else if (node.boundary) steelColor = 0xde7c5a; // warm coral/copper for foundation base
 
         const steelMat = getSteelMat(steelColor);
@@ -2998,7 +3354,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           ).normalize();
 
           const tabMesh = new THREE.Mesh(tabGeom, steelMat);
-          const tabCenterDist = (isPipeHub ? hubR * 0.65 : hubR * 0.55) + effTabL / 2;
+          const tabCenterDist = (isPipeHub ? hubR * 0.65 : hubR) + tabL * 0.45;
           tabMesh.position.copy(beamDir).multiplyScalar(tabCenterDist);
 
           if (isRoundRay) {
@@ -3010,16 +3366,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             const normalDir = new THREE.Vector3().crossVectors(beamDir, perpDir).normalize();
             const rotMat = new THREE.Matrix4().makeBasis(perpDir, normalDir, beamDir);
             tabMesh.quaternion.setFromRotationMatrix(rotMat);
-
-            // Add tangential root bridge in the hub plane from center out to the tab
-            const projBeam = beamDir.clone().addScaledVector(avgN, -beamDir.dot(avgN)).normalize();
-            const rootBridgeMesh = new THREE.Mesh(rootBridgeGeom, steelMat);
-            const perpProj = new THREE.Vector3().crossVectors(avgN, projBeam).normalize();
-            const rotProj = new THREE.Matrix4().makeBasis(perpProj, avgN, projBeam);
-            rootBridgeMesh.quaternion.setFromRotationMatrix(rotProj);
-            rootBridgeMesh.position.copy(projBeam).multiplyScalar(hubR * 0.72);
-            rootBridgeMesh.userData = { type: "node", nodeId: node.id };
-            connGroup.add(rootBridgeMesh);
           }
 
           tabMesh.userData = { type: "node", nodeId: node.id };
@@ -3028,13 +3374,13 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           // Fasteners
           if (!isGoodKarma) {
             const b1 = new THREE.Mesh(boltGeom, boltMat);
-            b1.position.copy(beamDir).multiplyScalar(hubR + tabL * 0.35);
+            b1.position.copy(beamDir).multiplyScalar((isPipeHub ? hubR * 0.65 : hubR) + tabL * 0.32);
             b1.quaternion.copy(tabMesh.quaternion);
             b1.userData = { type: "node", nodeId: node.id };
             connGroup.add(b1);
 
             const b2 = new THREE.Mesh(boltGeom, boltMat);
-            b2.position.copy(beamDir).multiplyScalar(hubR + tabL * 0.75);
+            b2.position.copy(beamDir).multiplyScalar((isPipeHub ? hubR * 0.65 : hubR) + tabL * 0.72);
             b2.quaternion.copy(tabMesh.quaternion);
             b2.userData = { type: "node", nodeId: node.id };
             connGroup.add(b2);
@@ -3042,143 +3388,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         }
 
         connectorsGroup.add(connGroup);
-      }
-
-      // Render Additional Doorway Engineering Connectors (Конектор на паралельній балці 2-го поверху та перемичці)
-      if (doorTriResult && doorTriResult.doorwayConnectors && doorTriResult.doorwayConnectors.length > 0) {
-        for (const dConn of doorTriResult.doorwayConnectors) {
-          const dConnGroup = new THREE.Group();
-          const dPos = new THREE.Vector3(dConn.position.x, dConn.position.y, dConn.position.z);
-          const dNorm = new THREE.Vector3(dConn.normal.x, dConn.normal.y, dConn.normal.z).normalize();
-
-          const offsetDist = Math.max(0.15, Math.min(3.5, thk * 0.8));
-          dConnGroup.position.copy(dPos).addScaledVector(dNorm, offsetDist);
-
-          // Highlight the parallel 2nd floor beam connector with vibrant emerald green
-          const isParallelBeam = dConn.role === "parallel_beam_hub";
-          const dSteelColor = isParallelBeam ? 0x10b981 : 0x0ea5e9;
-          const dSteelMat = getSteelMat(dSteelColor);
-
-          // A. Central Hub
-          if (!isGoodKarma) {
-            const hubMesh = new THREE.Mesh(hubGeom, dSteelMat);
-            hubMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dNorm);
-            hubMesh.userData = { type: "door_connector", connectorId: dConn.id, name: dConn.name };
-            dConnGroup.add(hubMesh);
-          }
-
-          // B. Steel rays/tabs along each ray direction
-          for (const rDir of dConn.rayDirections) {
-            const beamDir = new THREE.Vector3(rDir.x, rDir.y, rDir.z).normalize();
-            if (beamDir.lengthSq() < 0.01) continue;
-
-            const tabMesh = new THREE.Mesh(tabGeom, dSteelMat);
-            const tabCenterDist = (isPipeHub ? hubR * 0.65 : hubR * 0.55) + effTabL / 2;
-            tabMesh.position.copy(beamDir).multiplyScalar(tabCenterDist);
-
-            if (isRoundRay) {
-              tabMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), beamDir);
-            } else {
-              const perpDir = new THREE.Vector3().crossVectors(dNorm, beamDir).normalize();
-              const normalDir = new THREE.Vector3().crossVectors(beamDir, perpDir).normalize();
-              const rotMat = new THREE.Matrix4().makeBasis(perpDir, normalDir, beamDir);
-              tabMesh.quaternion.setFromRotationMatrix(rotMat);
-
-              const projBeam = beamDir.clone().addScaledVector(dNorm, -beamDir.dot(dNorm)).normalize();
-              const rootBridgeMesh = new THREE.Mesh(rootBridgeGeom, dSteelMat);
-              const perpProj = new THREE.Vector3().crossVectors(dNorm, projBeam).normalize();
-              const rotProj = new THREE.Matrix4().makeBasis(perpProj, dNorm, projBeam);
-              rootBridgeMesh.quaternion.setFromRotationMatrix(rotProj);
-              rootBridgeMesh.position.copy(projBeam).multiplyScalar(hubR * 0.72);
-              rootBridgeMesh.userData = { type: "door_connector", connectorId: dConn.id, name: dConn.name };
-              dConnGroup.add(rootBridgeMesh);
-            }
-
-            tabMesh.userData = { type: "door_connector", connectorId: dConn.id, name: dConn.name };
-            dConnGroup.add(tabMesh);
-
-            if (!isGoodKarma) {
-              const b1 = new THREE.Mesh(boltGeom, boltMat);
-              b1.position.copy(beamDir).multiplyScalar(hubR + tabL * 0.35);
-              b1.quaternion.copy(tabMesh.quaternion);
-              b1.userData = { type: "door_connector", connectorId: dConn.id, name: dConn.name };
-              dConnGroup.add(b1);
-
-              const b2 = new THREE.Mesh(boltGeom, boltMat);
-              b2.position.copy(beamDir).multiplyScalar(hubR + tabL * 0.75);
-              b2.quaternion.copy(tabMesh.quaternion);
-              b2.userData = { type: "door_connector", connectorId: dConn.id, name: dConn.name };
-              dConnGroup.add(b2);
-            }
-          }
-
-          connectorsGroup.add(dConnGroup);
-        }
-      }
-    }
-
-    // 4. Render Horizontal 2nd Floor Plane (Горизонтальна площина перекриття 2-го поверху)
-    if (model.tiers) {
-      for (const tier of model.tiers) {
-        if (tier.isLeveled && tier.leveledZ !== undefined && tier.level >= 2) {
-          const floorGroup = new THREE.Group();
-          floorGroup.position.set(0, 0, tier.leveledZ);
-
-          const tierNodes = tier.nodeIds.map(id => model.nodes[id]).filter(Boolean);
-          if (tierNodes.length >= 3) {
-            const avgR =
-              tierNodes.reduce((sum, n) => sum + Math.hypot(n.position.x, n.position.y), 0) /
-              tierNodes.length;
-
-            // Semi-transparent floor plane disk with amber/wood tint
-            const floorDiskGeom = new THREE.CircleGeometry(avgR, 64);
-            const floorDiskMat = new THREE.MeshBasicMaterial({
-              color: 0xd97706,
-              transparent: true,
-              opacity: 0.16,
-              side: THREE.DoubleSide,
-              depthWrite: false
-            });
-            const floorDisk = new THREE.Mesh(floorDiskGeom, floorDiskMat);
-            floorGroup.add(floorDisk);
-
-            // Perimeter ring line
-            const ringGeom = new THREE.BufferGeometry();
-            const ringPts: THREE.Vector3[] = [];
-            for (let i = 0; i <= 64; i++) {
-              const th = (i / 64) * Math.PI * 2;
-              ringPts.push(new THREE.Vector3(Math.cos(th) * avgR, Math.sin(th) * avgR, 0));
-            }
-            ringGeom.setFromPoints(ringPts);
-            const ringLine = new THREE.Line(
-              ringGeom,
-              new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.9 })
-            );
-            floorGroup.add(ringLine);
-
-            // Perimeter joist segments connecting nodes in circular order
-            const sortedNodes = [...tierNodes].sort((a, b) => {
-              return Math.atan2(a.position.y, a.position.x) - Math.atan2(b.position.y, b.position.x);
-            });
-
-            const joistGeom = new THREE.BufferGeometry();
-            const joistPts: THREE.Vector3[] = [];
-            for (let i = 0; i < sortedNodes.length; i++) {
-              const p1 = sortedNodes[i].position;
-              const p2 = sortedNodes[(i + 1) % sortedNodes.length].position;
-              joistPts.push(new THREE.Vector3(p1.x, p1.y, 0));
-              joistPts.push(new THREE.Vector3(p2.x, p2.y, 0));
-            }
-            joistGeom.setFromPoints(joistPts);
-            const joistLine = new THREE.LineSegments(
-              joistGeom,
-              new THREE.LineBasicMaterial({ color: 0xb45309, linewidth: 2 })
-            );
-            floorGroup.add(joistLine);
-
-            group.add(floorGroup);
-          }
-        }
       }
     }
 
@@ -3298,23 +3507,15 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     group.add(triangleLabelsGroup);
 
     // Initial layer visibility
-    const effShowBeams = showBeams || renderMode === "beams" || renderMode === "hybrid" || renderMode === "wireframe" || renderMode === "tent" || conversionMode === "fabric_strip" || plywoodMaterial === "fabric_roll" || assemblyState.isActive;
-    const effShowConnectors = showConnectors || renderMode === "connectors" || renderMode === "hybrid" || renderMode === "tent" || conversionMode === "fabric_strip" || plywoodMaterial === "fabric_roll";
-    const effShowOuter =
-      showOuterSheathing ||
-      renderMode === "sheathing" ||
-      renderMode === "hybrid" ||
-      renderMode === "glass" ||
-      renderMode === "tent" ||
-      conversionMode === "fabric_strip" ||
-      plywoodMaterial === "fabric_roll" ||
-      (assemblyState.isActive && assemblyVisibility.visibleFaceIds.size > 0);
+    const effShowBeams = showBeams || renderMode === "beams" || renderMode === "hybrid" || renderMode === "wireframe" || assemblyState.isActive;
+    const effShowConnectors = showConnectors || renderMode === "connectors" || renderMode === "hybrid";
+    const effShowOuter = showOuterSheathing || renderMode === "sheathing" || renderMode === "hybrid" || renderMode === "glass" || (assemblyState.isActive && assemblyVisibility.visibleFaceIds.size > 0);
     const effShowInner = showInnerSheathing || (innerSheathingParams?.enabled ?? false);
 
     beamsGroup.visible = effShowBeams;
     connectorsGroup.visible = effShowConnectors;
     outerSheathingGroup.visible = effShowOuter;
-    hitMeshesGroup.visible = !effShowOuter || conversionMode === "door" || conversionMode === "solar" || conversionMode === "window";
+    hitMeshesGroup.visible = !effShowOuter;
     innerSheathingGroup.visible = effShowInner;
     nodeLabelsGroup.visible = showNodeLabels;
     triangleLabelsGroup.visible = showTriangleLabels;
@@ -3332,39 +3533,28 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     assemblyState.isActive,
     assemblyState.progress,
     assemblyVisibility,
-    activeWindowKey,
-    activeDoorKey,
-    activeSolarKey,
-    activeFabricStripKey,
+    activeWindowFaceIds,
+    activeDoorFaceIds,
+    activeSolarFaceIds,
     doorParams,
     solarParams,
     innerSheathingParams?.material,
     innerSheathingParams?.seamGapMm,
     conversionMode,
-    solarAnalysis,
-    tentShowFullDome,
-    tentStripColor
+    solarAnalysis
   ]);
 
   // Fast 0ms visibility updates for 3D layers without rebuilding geometry
   useEffect(() => {
-    const effShowBeams = showBeams || renderMode === "beams" || renderMode === "hybrid" || renderMode === "wireframe" || renderMode === "tent" || conversionMode === "fabric_strip" || plywoodMaterial === "fabric_roll" || assemblyState.isActive;
-    const effShowConnectors = showConnectors || renderMode === "connectors" || renderMode === "hybrid" || renderMode === "tent" || conversionMode === "fabric_strip" || plywoodMaterial === "fabric_roll";
-    const effShowOuter =
-      showOuterSheathing ||
-      renderMode === "sheathing" ||
-      renderMode === "hybrid" ||
-      renderMode === "glass" ||
-      renderMode === "tent" ||
-      conversionMode === "fabric_strip" ||
-      plywoodMaterial === "fabric_roll" ||
-      (assemblyState.isActive && assemblyVisibility.visibleFaceIds.size > 0);
+    const effShowBeams = showBeams || renderMode === "beams" || renderMode === "hybrid" || renderMode === "wireframe" || assemblyState.isActive;
+    const effShowConnectors = showConnectors || renderMode === "connectors" || renderMode === "hybrid";
+    const effShowOuter = showOuterSheathing || renderMode === "sheathing" || renderMode === "hybrid" || renderMode === "glass" || (assemblyState.isActive && assemblyVisibility.visibleFaceIds.size > 0);
     const effShowInner = showInnerSheathing || (innerSheathingParams?.enabled ?? false);
 
     if (beamsGroupRef.current) beamsGroupRef.current.visible = effShowBeams;
     if (connectorsGroupRef.current) connectorsGroupRef.current.visible = effShowConnectors;
     if (outerSheathingGroupRef.current) outerSheathingGroupRef.current.visible = effShowOuter;
-    if (hitMeshesGroupRef.current) hitMeshesGroupRef.current.visible = !effShowOuter || conversionMode === "door" || conversionMode === "solar" || conversionMode === "window";
+    if (hitMeshesGroupRef.current) hitMeshesGroupRef.current.visible = !effShowOuter;
     if (innerSheathingGroupRef.current) innerSheathingGroupRef.current.visible = effShowInner;
     if (nodeLabelsGroupRef.current) nodeLabelsGroupRef.current.visible = showNodeLabels;
     if (triangleLabelsGroupRef.current) triangleLabelsGroupRef.current.visible = showTriangleLabels;
@@ -3376,9 +3566,6 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     showNodeLabels,
     showTriangleLabels,
     renderMode,
-    conversionMode,
-    activeFabricStripKey,
-    plywoodMaterial,
     assemblyState.isActive,
     assemblyVisibility.visibleFaceIds.size,
     innerSheathingParams?.enabled
@@ -3404,6 +3591,190 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       }
     });
   }, [sheathingOpacity]);
+
+  // Fast exploded view radial offset for all components without rebuilding geometry
+  useEffect(() => {
+    const domeR = model.parameters.diameter / 2;
+    const applyExplosion = (group: THREE.Group | null, factor: number) => {
+      if (!group) return;
+      group.children.forEach(child => {
+        const centroid = (child as any).userData?.centroid as THREE.Vector3 | undefined;
+        if (centroid) {
+          const radial = centroid.clone().setZ(Math.max(0, centroid.z)).normalize();
+          child.position.copy(radial.multiplyScalar(domeR * factor * explodedProgress));
+        }
+      });
+    };
+
+    applyExplosion(outerSheathingGroupRef.current, 0.24);
+    applyExplosion(innerSheathingGroupRef.current, -0.06);
+    applyExplosion(beamsGroupRef.current, 0.10);
+    applyExplosion(connectorsGroupRef.current, 0.03);
+    applyExplosion(hitMeshesGroupRef.current, 0.24);
+    applyExplosion(triangleLabelsGroupRef.current, 0.24);
+  }, [explodedProgress, model.parameters.diameter]);
+
+  // Exploded View smooth cycle playback
+  useEffect(() => {
+    if (!isExplodedPlaying) return;
+    let animId: number;
+    const startT = performance.now();
+    const cycle = () => {
+      const elapsed = (performance.now() - startT) / 1000;
+      // 4-second back-and-forth sinusoidal loop
+      const val = 0.5 - 0.5 * Math.cos((elapsed * Math.PI) / 2);
+      setExplodedProgress(val);
+      animId = requestAnimationFrame(cycle);
+    };
+    animId = requestAnimationFrame(cycle);
+    return () => cancelAnimationFrame(animId);
+  }, [isExplodedPlaying]);
+
+  // Environment lighting & sky theme synchronization
+  useEffect(() => {
+    if (!sceneRef.current || !ambientLightRef.current || !dirLight1Ref.current || !dirLight2Ref.current || !interiorLightRef.current) return;
+    applyEnvironmentTheme(
+      environmentTheme,
+      sceneRef.current,
+      {
+        ambient: ambientLightRef.current,
+        dir1: dirLight1Ref.current,
+        dir2: dirLight2Ref.current,
+        interior: interiorLightRef.current
+      },
+      gridHelperRef.current,
+      natureGroupRef.current
+    );
+  }, [environmentTheme]);
+
+  // Human scale figure visibility & positioning
+  useEffect(() => {
+    if (!humanGroupRef.current) return;
+    humanGroupRef.current.visible = showHumanScale;
+    const domeR = model.parameters.diameter / 2;
+    humanGroupRef.current.position.set(domeR * 1.15, -domeR * 0.25, 0);
+  }, [showHumanScale, model.parameters.diameter]);
+
+  // Video recording initiation & stream capture
+  const handleStartRecording = (options: VideoExportOptions) => {
+    if (!rendererRef.current) return;
+    const renderer = rendererRef.current;
+    const dom = renderer.domElement;
+
+    setIsRecording(true);
+    setRecordingProgress(0);
+    setRecordedVideoUrl(null);
+
+    const chunks: Blob[] = [];
+    recordingChunksRef.current = chunks;
+
+    let stream: MediaStream;
+    if (options.includeTitleOverlay) {
+      const recCanvas = document.createElement("canvas");
+      recCanvas.width = dom.width;
+      recCanvas.height = dom.height;
+      const rCtx = recCanvas.getContext("2d");
+      recordingCanvasRef.current = { canvas: recCanvas, ctx: rCtx };
+      stream = recCanvas.captureStream(options.fps);
+    } else {
+      stream = dom.captureStream(options.fps);
+    }
+
+    let mimeType = "video/webm; codecs=vp9";
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = "video/webm; codecs=vp8";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "video/webm";
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = "";
+        }
+      }
+    }
+
+    try {
+      const mr = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: 8000000 } : undefined);
+      mediaRecorderRef.current = mr;
+
+      mr.ondataavailable = e => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+
+      mr.onstop = () => {
+        const blob = new Blob(chunks, { type: mimeType || "video/webm" });
+        const url = URL.createObjectURL(blob);
+        setRecordedVideoUrl(url);
+        setIsRecording(false);
+        setRecordingProgress(100);
+
+        // Auto trigger download for seamless UX
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `geodome-${options.type}-${model.parameters.frequency}V-${model.parameters.diameter}mm.webm`;
+        link.click();
+      };
+
+      mr.start(100);
+
+      const startTime = performance.now();
+      const startTheta = cameraSpherical.current.theta;
+      const startPhi = cameraSpherical.current.phi;
+
+      recordingStateRef.current = {
+        options,
+        startTime,
+        startTheta,
+        startPhi,
+        mr
+      };
+    } catch (err) {
+      console.error("MediaRecorder start error:", err);
+      setIsRecording(false);
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    recordingStateRef.current = null;
+    recordingCanvasRef.current = null;
+  };
+
+  // Start dedicated 360° circular orbit video recording
+  const handleStart360OrbitRecording = (durationSec = 10) => {
+    setIsOrbitActive(true);
+    setIsOrbitPlaying(true);
+    handleStartRecording({
+      type: "orbit_360",
+      durationSeconds: durationSec,
+      fps: 30,
+      includeTitleOverlay: true,
+      resolutionMultiplier: 1.0
+    });
+  };
+
+  const handleTakeHighResSnapshot = (multiplier = 2) => {
+    if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return;
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    const scene = sceneRef.current;
+
+    const originalPixelRatio = renderer.getPixelRatio();
+    const targetPixelRatio = Math.min(4, Math.max(1, (window.devicePixelRatio || 1) * multiplier));
+
+    renderer.setPixelRatio(targetPixelRatio);
+    renderer.render(scene, camera);
+
+    const dataUrl = renderer.domElement.toDataURL("image/png");
+
+    renderer.setPixelRatio(originalPixelRatio);
+    renderer.render(scene, camera);
+
+    const link = document.createElement("a");
+    link.download = `geodome-3d-${model.parameters.frequency}V-${model.parameters.diameter}mm-snapshot.png`;
+    link.href = dataUrl;
+    link.click();
+  };
 
   // Camera presets
   const resetCamera = () => {
@@ -3477,11 +3848,106 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       {/* 3D Canvas Container */}
       <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing touch-none" />
 
-      {/* Top Bar Container - Single Responsive Row, prevents multi-line overlaying on mobile */}
-      <div className="absolute top-2.5 sm:top-4 inset-x-2.5 sm:inset-x-4 flex items-start justify-between gap-1.5 sm:gap-2 z-10 pointer-events-none">
-        {/* Left: Mode switcher with smooth horizontal scroll on mobile, no multi-row wrapping */}
-        <div className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-white/80 shadow-md max-w-[calc(100%-110px)] sm:max-w-[calc(100%-200px)] lg:max-w-none overflow-x-auto no-scrollbar">
+      {/* Row 1: Dedicated Full-Width 3D Layers & Display Modes Bar (Always Visible & Swipeable) */}
+      <div className="absolute top-2 sm:top-2.5 inset-x-2 sm:inset-x-3 z-20 pointer-events-none">
+        <div className="pointer-events-auto w-full flex items-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-white/80 shadow-md overflow-x-auto no-scrollbar scroll-smooth touch-pan-x">
+          {/* Quick badge indicating this is the layer control bar */}
+          <div className="flex items-center gap-1 pl-1.5 pr-1 text-[11px] font-bold text-[#8C9BAE] uppercase tracking-wider shrink-0 select-none">
+            <Layers className="w-3.5 h-3.5 text-[#5A6778]" />
+            <span className="hidden xs:inline">Шари:</span>
+          </div>
+
+          {/* 1. Frame / Struts Toggle */}
           <button
+            type="button"
+            onClick={handleToggleBeams}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
+              showBeams
+                ? "bg-[#E1EDE3] text-[#1A3E26] ring-1 ring-[#A6C7AE] font-bold shadow-2xs"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
+            }`}
+            title="Показати/сховати дерев'яні або металеві балки (каркас купола)"
+          >
+            <Box className="w-3.5 h-3.5 text-[#5B9279]" />
+            <span>Каркас</span>
+            {showBeams && <span className="text-[10px] text-[#2E7D32] font-bold">✓</span>}
+          </button>
+
+          {/* 2. Ray Connectors Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleConnectors}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
+              showConnectors
+                ? "bg-[#E0F2FE] text-[#0369A1] ring-1 ring-[#7DD3FC] font-bold shadow-2xs"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
+            }`}
+            title="Показати/сховати лучеві вузлові конектори"
+          >
+            <Disc className="w-3.5 h-3.5 text-[#0284C7]" />
+            <span className="hidden sm:inline">Конектори</span>
+            <span className="sm:hidden">Вузли</span>
+            {showConnectors && <span className="text-[10px] text-[#0284C7] font-bold">✓</span>}
+          </button>
+
+          {/* 3. Outer Sheathing Triangles Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleOuterSheathing}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
+              showOuterSheathing
+                ? "bg-[#FDEFE7] text-[#8B5E34] ring-1 ring-[#FDBA74] font-bold shadow-2xs"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
+            }`}
+            title="Показати/сховати зовнішні трикутники обшивки (фанера / OSB зі швом)"
+          >
+            <Triangle className="w-3.5 h-3.5 text-[#DE7C5A]" />
+            <span className="hidden sm:inline">Зовн. обшивка</span>
+            <span className="sm:hidden">Обшивка</span>
+            {showOuterSheathing && <span className="text-[10px] text-[#DE7C5A] font-bold">✓</span>}
+            {showOuterSheathing && (
+              <span className="hidden md:inline px-1.5 py-0.5 text-[10px] font-mono font-bold bg-[#EFE8DD] text-[#7A4E21] rounded-md">
+                {plywoodThickness} мм
+              </span>
+            )}
+          </button>
+
+          {/* 4. Inner Sheathing Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleInnerSheathing}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
+              showInnerSheathing
+                ? "bg-[#EDE9FE] text-[#6D28D9] ring-1 ring-[#C4B5FD] font-bold shadow-2xs"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
+            }`}
+            title="Показати/сховати внутрішню обшивку купола (гіпсокартон / фанера)"
+          >
+            <Home className="w-3.5 h-3.5 text-[#7C3AED]" />
+            <span className="hidden sm:inline">Внутр. обшивка</span>
+            <span className="sm:hidden">Внутр.</span>
+            {showInnerSheathing && <span className="text-[10px] text-[#7C3AED] font-bold">✓</span>}
+          </button>
+
+          {/* 5. All Elements Together Button */}
+          <button
+            type="button"
+            onClick={handleToggleAllLayers}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold rounded-xl transition-all shrink-0 cursor-pointer ${
+              showBeams && showConnectors && showOuterSheathing && showInnerSheathing
+                ? "bg-[#D97706] text-white shadow-xs ring-2 ring-[#FDE68A]"
+                : "bg-[#FFFBEB] text-[#92400E] hover:bg-[#FEF3C7] border border-[#FDE68A]"
+            }`}
+            title="Відобразити всі 4 елементи разом: каркас + конектори + зовнішня обшивка + внутрішня обшивка"
+          >
+            <Layers className="w-3.5 h-3.5 text-[#D97706]" />
+            <span className="hidden sm:inline">Всі разом</span>
+            <span className="sm:hidden">Всі 4</span>
+          </button>
+
+          {/* 6. 3D Assembly Animation Mode */}
+          <button
+            type="button"
             onClick={handleToggleAssemblyMode}
             className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer shrink-0 ${
               assemblyState.isActive
@@ -3500,94 +3966,9 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
           <span className="w-[1px] h-4 bg-[#DCD6CA] mx-0.5 shrink-0" />
 
-          {/* 1. Frame / Struts Toggle */}
+          {/* 7. Window Mode Button */}
           <button
-            onClick={handleToggleBeams}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
-              showBeams
-                ? "bg-[#E1EDE3] text-[#1A3E26] ring-1 ring-[#A6C7AE] font-bold shadow-2xs"
-                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
-            }`}
-            title="Показати/сховати дерев'яні або металеві балки (каркас купола)"
-          >
-            <Box className="w-3.5 h-3.5 text-[#5B9279]" />
-            <span className="hidden sm:inline">Каркас</span>
-            <span className="sm:hidden">Каркас</span>
-            {showBeams && <span className="text-[10px] text-[#2E7D32]">✓</span>}
-          </button>
-
-          {/* 2. Ray Connectors Toggle */}
-          <button
-            onClick={handleToggleConnectors}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
-              showConnectors
-                ? "bg-[#E0F2FE] text-[#0369A1] ring-1 ring-[#7DD3FC] font-bold shadow-2xs"
-                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
-            }`}
-            title="Показати/сховати лучеві вузлові конектори"
-          >
-            <Disc className="w-3.5 h-3.5 text-[#0284C7]" />
-            <span className="hidden sm:inline">Конектори</span>
-            <span className="sm:hidden">Вузли</span>
-            {showConnectors && <span className="text-[10px] text-[#0284C7]">✓</span>}
-          </button>
-
-          {/* 3. Outer Sheathing Triangles Toggle */}
-          <button
-            onClick={handleToggleOuterSheathing}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
-              showOuterSheathing
-                ? "bg-[#FDEFE7] text-[#8B5E34] ring-1 ring-[#FDBA74] font-bold shadow-2xs"
-                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
-            }`}
-            title="Показати/сховати зовнішні трикутники обшивки (фанера / OSB зі швом)"
-          >
-            <Triangle className="w-3.5 h-3.5 text-[#DE7C5A]" />
-            <span className="hidden sm:inline">Зовн. обшивка</span>
-            <span className="sm:hidden">Обшивка</span>
-            {showOuterSheathing && <span className="text-[10px] text-[#DE7C5A]">✓</span>}
-            {showOuterSheathing && (
-              <span className="hidden md:inline px-1.5 py-0.5 text-[10px] font-mono font-bold bg-[#EFE8DD] text-[#7A4E21] rounded-md">
-                {plywoodThickness} мм
-              </span>
-            )}
-          </button>
-
-          {/* 4. Inner Sheathing Toggle */}
-          <button
-            onClick={handleToggleInnerSheathing}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
-              showInnerSheathing
-                ? "bg-[#EDE9FE] text-[#6D28D9] ring-1 ring-[#C4B5FD] font-bold shadow-2xs"
-                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
-            }`}
-            title="Показати/сховати внутрішню обшивку купола (гіпсокартон / фанера)"
-          >
-            <Home className="w-3.5 h-3.5 text-[#7C3AED]" />
-            <span className="hidden sm:inline">Внутр. обшивка</span>
-            <span className="sm:hidden">Внутр.</span>
-            {showInnerSheathing && <span className="text-[10px] text-[#7C3AED]">✓</span>}
-          </button>
-
-          {/* 5. All Elements Together Button */}
-          <button
-            onClick={handleToggleAllLayers}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold rounded-xl transition-all shrink-0 cursor-pointer ${
-              showBeams && showConnectors && showOuterSheathing && showInnerSheathing
-                ? "bg-[#D97706] text-white shadow-xs ring-2 ring-[#FDE68A]"
-                : "bg-[#FFFBEB] text-[#92400E] hover:bg-[#FEF3C7] border border-[#FDE68A]"
-            }`}
-            title="Відобразити всі 4 елементи разом: каркас + конектори + зовнішня обшивка + внутрішня обшивка"
-          >
-            <Layers className="w-3.5 h-3.5 text-[#D97706]" />
-            <span className="hidden sm:inline">Всі разом</span>
-            <span className="sm:hidden">Всі 4</span>
-          </button>
-
-          <span className="w-[1px] h-4 bg-[#DCD6CA] mx-0.5 shrink-0" />
-
-          {/* 1. Window Mode Button */}
-          <button
+            type="button"
             onClick={() => {
               const next = conversionMode === "window" ? "none" : "window";
               setConversionMode(next);
@@ -3596,18 +3977,17 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                 setRenderMode("hybrid");
               }
             }}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 ${
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
               conversionMode === "window"
                 ? "bg-[#0284C7] text-white shadow-xs font-bold ring-2 ring-[#38BDF8]"
                 : activeWindowFaceIds.length > 0
                 ? "bg-[#E0F2FE] text-[#0369A1] hover:bg-[#BAE6FD] font-semibold"
-                : "text-[#5A6778] hover:text-[#2D3748]"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
             }`}
             title="Режим вибору трикутників обшивки для конверсії у вікна"
           >
             <Sun className={`w-3.5 h-3.5 ${conversionMode === "window" ? "text-amber-300" : "text-[#0284C7]"}`} />
-            <span className="hidden sm:inline">Вікна</span>
-            <span className="sm:hidden">Вікна</span>
+            <span>Вікна</span>
             {activeWindowFaceIds.length > 0 && (
               <span className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded-md ${
                 conversionMode === "window" ? "bg-white/20 text-white" : "bg-[#BAE6FD] text-[#0369A1]"
@@ -3617,8 +3997,9 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             )}
           </button>
 
-          {/* 2. Doorway Conversion Mode Button */}
+          {/* 8. Doorway Conversion Mode Button */}
           <button
+            type="button"
             onClick={() => {
               const next = conversionMode === "door" ? "none" : "door";
               setConversionMode(next);
@@ -3627,18 +4008,17 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                 setRenderMode("hybrid");
               }
             }}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 ${
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
               conversionMode === "door"
                 ? "bg-[#D97706] text-white shadow-xs font-bold ring-2 ring-[#FDE68A]"
                 : activeDoorFaceIds.length > 0
                 ? "bg-[#FEF3C7] text-[#92400E] hover:bg-[#FDE68A] font-semibold"
-                : "text-[#5A6778] hover:text-[#2D3748]"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
             }`}
             title="Режим конвертації у дверний пройм із авто-захопленням сусіднього трикутника"
           >
             <DoorOpen className={`w-3.5 h-3.5 ${conversionMode === "door" ? "text-white" : "text-[#D97706]"}`} />
-            <span className="hidden sm:inline">Двері</span>
-            <span className="sm:hidden">Двері</span>
+            <span>Двері</span>
             {activeDoorFaceIds.length > 0 && (
               <span className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded-md ${
                 conversionMode === "door" ? "bg-white/20 text-white" : "bg-[#FDE68A] text-[#92400E]"
@@ -3648,8 +4028,9 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             )}
           </button>
 
-          {/* 3. Solar PV Triangle Mode Button */}
+          {/* 9. Solar PV Triangle Mode Button */}
           <button
+            type="button"
             onClick={() => {
               const next = conversionMode === "solar" ? "none" : "solar";
               setConversionMode(next);
@@ -3658,12 +4039,12 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                 setRenderMode("hybrid");
               }
             }}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 ${
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
               conversionMode === "solar"
                 ? "bg-[#7C3AED] text-white shadow-xs font-bold ring-2 ring-[#DDD6FE]"
                 : activeSolarFaceIds.length > 0
                 ? "bg-[#EDE9FE] text-[#5B21B6] hover:bg-[#DDD6FE] font-semibold"
-                : "text-[#5A6778] hover:text-[#2D3748]"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
             }`}
             title="Режим вибору трикутників для генерації струму під склом (BIPV)"
           >
@@ -3679,34 +4060,32 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             )}
           </button>
 
-          {/* 4. Fabric Strip / Tent Mode Button */}
+          {/* 10. Fabric Strip Selection Mode Button */}
           <button
+            type="button"
             onClick={() => {
-              const nextTent = renderMode !== "tent" || conversionMode !== "fabric_strip";
-              if (nextTent) {
-                setRenderMode("tent");
-                setConversionMode("fabric_strip");
-                setWindowMode(false);
-              } else {
-                setRenderMode("beams");
-                setConversionMode("none");
+              const next = conversionMode === "fabric_strip" ? "none" : "fabric_strip";
+              setConversionMode(next);
+              setWindowMode(false);
+              if (next === "fabric_strip" && renderMode === "beams") {
+                setRenderMode("hybrid");
               }
             }}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 ${
-              renderMode === "tent" || conversionMode === "fabric_strip"
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
+              conversionMode === "fabric_strip"
                 ? "bg-[#D97706] text-white shadow-xs font-bold ring-2 ring-[#FDE68A]"
                 : activeFabricStripFaceIds.length > 0
                 ? "bg-[#FEF3C7] text-[#92400E] hover:bg-[#FDE68A] font-semibold"
-                : "text-[#5A6778] hover:text-[#2D3748]"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
             }`}
-            title="Режим тенту: відображення розкрою полоси тканини одним кольором на куполі"
+            title="Режим вибору трикутників у безперервну смугу розкрою тканини / тенту"
           >
-            <Scissors className={`w-3.5 h-3.5 ${renderMode === "tent" || conversionMode === "fabric_strip" ? "text-white" : "text-[#D97706]"}`} />
-            <span className="hidden sm:inline">Тент (розкрій)</span>
+            <Scissors className={`w-3.5 h-3.5 ${conversionMode === "fabric_strip" ? "text-white" : "text-[#D97706]"}`} />
+            <span className="hidden sm:inline">Смуга тенту</span>
             <span className="sm:hidden">Тент</span>
             {activeFabricStripFaceIds.length > 0 && (
               <span className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded-md ${
-                renderMode === "tent" || conversionMode === "fabric_strip" ? "bg-white/20 text-white" : "bg-[#FDE68A] text-[#92400E]"
+                conversionMode === "fabric_strip" ? "bg-white/20 text-white" : "bg-[#FDE68A] text-[#92400E]"
               }`}>
                 {activeFabricStripFaceIds.length}
               </span>
@@ -3715,45 +4094,32 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
           <span className="w-[1px] h-4 bg-[#DCD6CA] mx-0.5 shrink-0" />
 
+          {/* 11. Glass Mode Button */}
           <button
-            onClick={() => {
-              setRenderMode(prev => prev === "glass" ? "beams" : "glass");
-              setConversionMode("none");
-            }}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 ${
-              renderMode === "glass" ? "tactile-pill-active text-[#1A2E3B] bg-[#E6F1F7]" : "text-[#5A6778] hover:text-[#2D3748]"
+            type="button"
+            onClick={() => setRenderMode("glass")}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
+              renderMode === "glass" ? "tactile-pill-active text-[#1A2E3B] bg-[#E6F1F7]" : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
             }`}
-            title="Архітектурне скло купола"
           >
             <Sparkles className="w-3.5 h-3.5 text-[#4A7C9B]" />
             <span>Скло</span>
           </button>
 
-          <button
-            onClick={() => setRenderMode("connectors")}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 ${
-              renderMode === "connectors" ? "tactile-pill-active text-[#1A3E26] bg-[#E1EDE3]" : "text-[#5A6778] hover:text-[#2D3748]"
-            }`}
-          >
-            <Eye className="w-3.5 h-3.5 text-[#5B9279]" />
-            <span className="hidden sm:inline">Конектори</span>
-            <span className="sm:hidden">Вузли</span>
-          </button>
-
-          {/* Button: «включити/виключити нумерацію вузлів» (маркування типу АА1, АА2...) */}
+          {/* 12. Button: Node Labels */}
           <button
             type="button"
             onClick={() => setShowNodeLabels(!showNodeLabels)}
             className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
               showNodeLabels
                 ? "bg-[#5B9279] text-white font-bold shadow-2xs"
-                : "text-[#5A6778] hover:text-[#2D3748] hover:bg-black/5"
+                : "text-[#5A6778] hover:text-[#2D3748] bg-white/70"
             }`}
             title="Включити/виключити нумерацію вузлів купола та пройомів (маркування типу АА1, АА2, АБ3...)"
           >
             <CircleDot className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Нумерація вузлів: {showNodeLabels ? "Увімк." : "Вимк."}</span>
-            <span className="sm:hidden">№ Вузлів: {showNodeLabels ? "Увімк." : "Вимк."}</span>
+            <span className="hidden sm:inline">№ Вузлів: {showNodeLabels ? "Увімк." : "Вимк."}</span>
+            <span className="sm:hidden">№ Вузлів</span>
           </button>
 
           {/* Interactive Connector Ring Size & Strut Trim Input (Desktop) */}
@@ -3828,69 +4194,389 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             </div>
           )}
         </div>
+      </div>
 
-        {/* Right: Camera & Orbit Tooling + AR Button */}
-        <div className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-white/80 shadow-md shrink-0">
+      {/* Row 2: Secondary Bar - 3D Camera, 360 Orbit, Video Studio, AR & Scene Tools */}
+      <div className="absolute top-11 sm:top-12 inset-x-2 sm:inset-x-auto sm:right-3 z-10 pointer-events-none flex justify-end">
+        <div className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-white/80 shadow-md max-w-full overflow-x-auto no-scrollbar">
+          {/* Button: 360° Circular Orbit Flyaround */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !isOrbitActive;
+              setIsOrbitActive(next);
+              setIsOrbitPlaying(next);
+            }}
+            title="Автоматичний круговий обліт камери навколо купола (360° Orbit) з панеллю керування та можливістю запису відео"
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer shrink-0 ${
+              isOrbitActive
+                ? "bg-gradient-to-r from-[#DE7C5A] to-[#C9603D] text-white shadow-md ring-2 ring-[#DE7C5A]/40"
+                : "bg-white hover:bg-[#FAF7F2] text-[#1A2E3B] border border-[#E8E2D8] shadow-2xs"
+            }`}
+          >
+            <RotateCw className={`w-3.5 h-3.5 ${isOrbitActive && isOrbitPlaying ? "animate-spin text-white" : "text-[#DE7C5A]"}`} />
+            <span>360° Обліт</span>
+            {isOrbitActive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+            )}
+          </button>
+
+          {/* Button: Video Animation & Studio Export */}
+          <button
+            type="button"
+            onClick={() => setIsVideoModalOpen(true)}
+            title="3D Відеостудія: 360° обліт, таймлапс монтажу, вибух-схема та 4K фото"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-[#1A2E3B] to-[#2D3748] text-white hover:bg-black shadow-sm transition-all transform active:scale-95 whitespace-nowrap cursor-pointer shrink-0"
+          >
+            <Film className="w-3.5 h-3.5 text-[#DE7C5A]" />
+            <span className="hidden sm:inline">Відеостудія 3D</span>
+            <span className="sm:hidden text-[11px]">Відео</span>
+            {isRecording && (
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+            )}
+          </button>
+
           {/* Button 'Перегляд в AR' */}
           <button
+            type="button"
             onClick={() => setIsARModalOpen(true)}
             title="Перегляд купола у доповненій реальності (AR) через камеру смартфона"
-            className="flex items-center gap-1 px-2 sm:px-3 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-[#DE7C5A] to-[#C9603D] text-white hover:opacity-95 shadow-sm transition-all transform active:scale-95 whitespace-nowrap cursor-pointer"
+            className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-[#DE7C5A] to-[#C9603D] text-white hover:opacity-95 shadow-sm transition-all transform active:scale-95 whitespace-nowrap cursor-pointer shrink-0"
           >
             <Smartphone className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Перегляд в AR</span>
             <span className="sm:hidden text-[11px]">AR</span>
           </button>
 
-          <span className="w-[1px] h-4 bg-[#DCD6CA] mx-0.5" />
-
+          {/* Button: Exploded View toggle */}
           <button
-            onClick={() => setAutoRotate(!autoRotate)}
-            title="Автоматичне обертання"
-            className={`p-1.5 sm:p-2 rounded-xl text-xs transition-all ${
-              autoRotate ? "tactile-btn-pressed text-[#5B9279] bg-[#E1EDE3]" : "tactile-btn text-[#5A6778]"
+            type="button"
+            onClick={() => {
+              const next = !isExplodedActive;
+              setIsExplodedActive(next);
+              if (!next) {
+                setExplodedProgress(0);
+                setIsExplodedPlaying(false);
+              } else {
+                setExplodedProgress(0.65);
+              }
+            }}
+            title="Вибух-схема: радіальний розліт обшивки та балок купола назовні"
+            className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 sm:py-1.5 text-xs font-semibold rounded-xl transition-all cursor-pointer shrink-0 ${
+              isExplodedActive || explodedProgress > 0.05
+                ? "bg-[#4A7C9B] text-white font-bold shadow-2xs"
+                : "tactile-btn text-[#5A6778]"
             }`}
           >
-            <RotateCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${autoRotate ? "animate-spin" : ""}`} />
+            <Sparkles className="w-3.5 h-3.5 text-[#38BDF8]" />
+            <span className="hidden md:inline">Вибух-схема</span>
+            <span className="md:hidden text-[11px]">Вибух</span>
           </button>
 
+          {/* Button: Human 1.8m scale figure toggle */}
           <button
+            type="button"
+            onClick={() => setShowHumanScale(!showHumanScale)}
+            title="Фігура людини зростом 1.80 м для наочного відчуття реального масштабу"
+            className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 sm:py-1.5 text-xs font-semibold rounded-xl transition-all cursor-pointer shrink-0 ${
+              showHumanScale
+                ? "bg-[#0284C7] text-white font-bold shadow-2xs"
+                : "tactile-btn text-[#5A6778]"
+            }`}
+          >
+            <User className="w-3.5 h-3.5 text-[#7DD3FC]" />
+            <span className="hidden md:inline">Людина 1.8м</span>
+            <span className="md:hidden text-[11px]">1.8м</span>
+          </button>
+
+          {/* Button: Environment theme cycler */}
+          <button
+            type="button"
+            onClick={() => {
+              const themes: Array<"studio" | "nature" | "sunset" | "night"> = ["studio", "nature", "sunset", "night"];
+              const nextIdx = (themes.indexOf(environmentTheme) + 1) % themes.length;
+              setEnvironmentTheme(themes[nextIdx]);
+            }}
+            title={`Оточення: ${
+              environmentTheme === "studio"
+                ? "Мінімалістична студія"
+                : environmentTheme === "nature"
+                ? "Ліс та газон"
+                : environmentTheme === "sunset"
+                ? "Золота година / Захід"
+                : "Зоряна ніч"
+            }. Клікніть для зміни оточення.`}
+            className="flex items-center gap-1 px-1.5 sm:px-2 py-1 sm:py-1.5 text-xs font-semibold rounded-xl tactile-btn text-[#5A6778] transition-all cursor-pointer shrink-0"
+          >
+            {environmentTheme === "studio" && <Box className="w-3.5 h-3.5 text-[#8B5E34]" />}
+            {environmentTheme === "nature" && <TreePine className="w-3.5 h-3.5 text-[#2E7D32]" />}
+            {environmentTheme === "sunset" && <Sun className="w-3.5 h-3.5 text-[#EA580C]" />}
+            {environmentTheme === "night" && <Moon className="w-3.5 h-3.5 text-[#6366F1]" />}
+            <span className="hidden lg:inline capitalize">
+              {environmentTheme === "studio" ? "Студія" : environmentTheme === "nature" ? "Природа" : environmentTheme === "sunset" ? "Захід" : "Ніч"}
+            </span>
+          </button>
+
+          <span className="w-[1px] h-4 bg-[#DCD6CA] mx-0.5 shrink-0" />
+
+          {/* Camera presets */}
+          <button
+            type="button"
             onClick={setViewTop}
             title="Вид зверху (План)"
-            className="hidden sm:inline-block px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-xl tactile-btn text-[#4A5568]"
+            className="hidden sm:inline-block px-2 py-1 text-xs font-medium rounded-xl tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
           >
             План
           </button>
 
           <button
+            type="button"
             onClick={setViewFront}
             title="Вид спереду (Фасад)"
-            className="hidden sm:inline-block px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-xl tactile-btn text-[#4A5568]"
+            className="hidden sm:inline-block px-2 py-1 text-xs font-medium rounded-xl tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
           >
             Фасад
           </button>
 
           <button
+            type="button"
             onClick={setViewInside}
             title="Огляд зсередини (інтер'єр та внутрішня обшивка)"
-            className="hidden sm:inline-block px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-xl tactile-btn text-[#4A5568]"
+            className="hidden sm:inline-block px-2 py-1 text-xs font-medium rounded-xl tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
           >
             Зсередини
           </button>
 
           <button
+            type="button"
             onClick={resetCamera}
             title="Скинути ракурс"
-            className="p-1.5 sm:p-2 rounded-xl text-xs tactile-btn text-[#4A5568]"
+            className="p-1 sm:p-1.5 rounded-xl text-xs tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
           >
-            <Maximize2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <Maximize2 className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
+      {/* 360° Circular Orbit Flyaround Interactive Control Bar */}
+      {isOrbitActive && (
+        <div className="absolute top-20 sm:top-22 left-3 right-3 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150 max-w-[calc(100%-24px)] sm:max-w-2xl">
+          <div className="flex flex-col gap-2 p-2.5 sm:p-3 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-[#DE7C5A] shadow-xl text-xs text-[#1A2E3B]">
+            {/* Top row: Status, play/pause, angle radar, and close */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-xl bg-gradient-to-tr from-[#DE7C5A] to-[#E5A352] flex items-center justify-center text-white shadow-2xs shrink-0">
+                  <RotateCw className={`w-4 h-4 ${isOrbitPlaying ? "animate-spin" : ""}`} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-xs text-[#1A2E3B]">360° Круговий обліт</span>
+                    <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                      {currentOrbitAngleDeg}° / 360°
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-[#6B7280] hidden sm:block">
+                    Кінематографічне кругове обертання камери навколо геокупола
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                {/* Play / Pause button */}
+                <button
+                  type="button"
+                  onClick={() => setIsOrbitPlaying(!isOrbitPlaying)}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center gap-1 shadow-2xs ${
+                    isOrbitPlaying
+                      ? "bg-[#1A2E3B] text-white"
+                      : "bg-[#DE7C5A] text-white hover:bg-[#C9603D]"
+                  }`}
+                  title={isOrbitPlaying ? "Призупинити обліт" : "Продовжити обліт"}
+                >
+                  {isOrbitPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                  <span>{isOrbitPlaying ? "Пауза" : "Пуск"}</span>
+                </button>
+
+                {/* Close bar */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsOrbitActive(false);
+                    setIsOrbitPlaying(false);
+                  }}
+                  className="p-1 text-[#64748B] hover:text-[#1E293B] hover:bg-black/5 rounded-xl cursor-pointer"
+                  title="Закрити панель обльоту"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Middle row: Speed, Direction, Altitude Preset Controls */}
+            <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-[#E8E2D8] text-[11px]">
+              {/* Speed Buttons */}
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] font-semibold text-[#5A6778]">Швидкість:</span>
+                {[0.5, 1, 2].map(spd => (
+                  <button
+                    key={spd}
+                    type="button"
+                    onClick={() => setOrbitSpeed(spd)}
+                    className={`px-1.5 py-0.5 rounded-lg font-mono font-bold transition-all ${
+                      orbitSpeed === spd
+                        ? "bg-[#1A2E3B] text-white shadow-2xs"
+                        : "bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6]"
+                    }`}
+                  >
+                    {spd}x
+                  </button>
+                ))}
+              </div>
+
+              {/* Direction Button */}
+              <button
+                type="button"
+                onClick={() => setOrbitDirection(orbitDirection === 1 ? -1 : 1)}
+                className="px-2 py-0.5 rounded-lg bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6] font-semibold transition-all flex items-center gap-1 cursor-pointer"
+                title="Змінити напрямок обертання"
+              >
+                <span>Напрямок:</span>
+                <span className="font-bold">{orbitDirection === 1 ? "↻ За годинниковою" : "↺ Проти"}</span>
+              </button>
+
+              {/* Altitude presets */}
+              <div className="flex items-center gap-1 ml-auto">
+                <span className="text-[10px] font-semibold text-[#5A6778]">Ракурс:</span>
+                {(["low", "medium", "high", "wave"] as const).map(alt => (
+                  <button
+                    key={alt}
+                    type="button"
+                    onClick={() => setOrbitAltitude(alt)}
+                    className={`px-1.5 py-0.5 rounded-lg text-[10px] font-semibold transition-all ${
+                      orbitAltitude === alt
+                        ? "bg-[#DE7C5A] text-white font-bold shadow-2xs"
+                        : "bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6]"
+                    }`}
+                  >
+                    {alt === "low" ? "Фасад" : alt === "medium" ? "45° Ізо" : alt === "high" ? "Дрон ✈" : "Хвиля ~"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Bottom row: Direct 360° Video Recording Trigger */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[#E8E2D8]">
+              {isRecording ? (
+                <div className="flex items-center justify-between w-full gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
+                    <span className="font-bold text-xs text-red-600">
+                      Йде запис 360° відео: {Math.round(recordingProgress)}% ({currentOrbitAngleDeg}° / 360°)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleStopRecording}
+                    className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm cursor-pointer"
+                  >
+                    <Square className="w-3 h-3 fill-current" />
+                    <span>Зупинити та зберегти</span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1.5 text-[11px] text-[#5A6778]">
+                    <span>Тривалість відео:</span>
+                    {[5, 10, 15].map(sec => (
+                      <button
+                        key={sec}
+                        type="button"
+                        onClick={() => setOrbitRecordDuration(sec)}
+                        className={`px-2 py-0.5 rounded-lg font-mono font-bold text-[10px] transition-all ${
+                          orbitRecordDuration === sec
+                            ? "bg-[#8B5E34] text-white shadow-2xs"
+                            : "bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6]"
+                        }`}
+                      >
+                        {sec}с
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleStart360OrbitRecording(orbitRecordDuration)}
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-red-600 to-[#EA580C] hover:from-red-700 hover:to-[#C2410C] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-red-500/20 cursor-pointer transition-all transform active:scale-95"
+                  >
+                    <Video className="w-3.5 h-3.5 fill-current" />
+                    <span>🔴 Записати відео прольоту 360° ({orbitRecordDuration}с)</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Exploded View Dynamic Slider Control */}
+      {isExplodedActive && (
+        <div className="absolute top-20 sm:top-22 left-3 sm:left-4 z-20 animate-in fade-in slide-in-from-top-2 duration-150">
+          <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-[#38BDF8] shadow-lg text-xs text-[#1A2E3B]">
+            <div className="flex items-center gap-1.5 font-bold text-[#0369A1]">
+              <Sparkles className="w-4 h-4 text-[#0284C7]" />
+              <span>Вибух-схема:</span>
+            </div>
+
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={explodedProgress}
+              onChange={e => {
+                setIsExplodedPlaying(false);
+                setExplodedProgress(parseFloat(e.target.value));
+              }}
+              className="w-24 sm:w-36 h-2 rounded-lg bg-[#E8E2D8] accent-[#0284C7] cursor-pointer"
+              title="Ступінь розльоту деталей від 0% до 100%"
+            />
+
+            <span className="font-mono font-bold text-[11px] bg-white px-2 py-0.5 rounded-lg border border-[#CBD5E1] min-w-[45px] text-center">
+              {Math.round(explodedProgress * 100)}%
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setIsExplodedPlaying(!isExplodedPlaying)}
+              className={`px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-all flex items-center gap-1 ${
+                isExplodedPlaying
+                  ? "bg-[#0284C7] text-white shadow-2xs"
+                  : "bg-white text-[#0369A1] border border-[#CBD5E1] hover:bg-[#F0F9FF]"
+              }`}
+            >
+              {isExplodedPlaying ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current" />}
+              <span>{isExplodedPlaying ? "Пауза" : "Анімувати"}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsExplodedActive(false);
+                setExplodedProgress(0);
+                setIsExplodedPlaying(false);
+              }}
+              className="p-1 text-[#64748B] hover:text-[#1E293B] hover:bg-black/5 rounded-lg cursor-pointer"
+              title="Закрити вибух-схему"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Active Conversion Mode Contextual Floating Banner */}
       {conversionMode === "door" && (
-        <div className="absolute top-16 sm:top-18 left-3 right-3 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150">
+        <div className="absolute top-20 sm:top-22 left-3 right-3 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-2xl bg-[#FFFBEB]/95 backdrop-blur-md border border-[#FDE68A] shadow-md text-xs text-[#92400E]">
             <div className="flex items-center gap-2">
               <DoorOpen className="w-4 h-4 text-[#D97706] shrink-0" />
@@ -3951,7 +4637,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       )}
 
       {conversionMode === "solar" && (
-        <div className="absolute top-16 sm:top-18 left-2 right-2 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150 max-w-[calc(100%-16px)] sm:max-w-2xl">
+        <div className="absolute top-20 sm:top-22 left-2 right-2 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150 max-w-[calc(100%-16px)] sm:max-w-2xl">
           <div className="flex flex-col gap-2 p-3 rounded-2xl bg-[#EDE9FE]/95 backdrop-blur-md border border-[#DDD6FE] shadow-lg text-xs text-[#5B21B6]">
             {/* Header row */}
             <div className="flex items-center justify-between gap-2">
@@ -4056,7 +4742,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       )}
 
       {conversionMode === "window" && (
-        <div className="absolute top-16 sm:top-18 left-3 right-3 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150">
+        <div className="absolute top-20 sm:top-22 left-3 right-3 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-2xl bg-[#F0F9FF]/95 backdrop-blur-md border border-[#BAE6FD] shadow-md text-xs text-[#0369A1]">
             <div className="flex items-center gap-2">
               <Sun className="w-4 h-4 text-[#0284C7] shrink-0" />
@@ -4086,286 +4772,75 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         </div>
       )}
 
-      {(conversionMode === "fabric_strip" || renderMode === "tent") && (
-        tentPanelMinimized ? (
-          <div className="absolute top-16 sm:top-18 left-3 z-20 animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-auto">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#FFFBEB]/95 backdrop-blur-md border border-[#FDE68A] shadow-md text-xs text-[#92400E]">
-              <Scissors className="w-3.5 h-3.5 text-[#D97706]" />
-              <span className="font-bold text-[11px]">
-                {tentStripSelectionMode === "plinth" ? "Тент: Пояс цоколя" : `Тент: Смуга #${selectedFabricStripIndex + 1}`}
-              </span>
-              <span className="font-mono text-[10px] bg-white px-1.5 py-0.5 rounded border border-[#FDE68A] text-[#92400E] font-bold">
-                {activeFabricStripFaceIds.length} тр.
-              </span>
-              {tentStripSelectionMode === "dome" && domeStrips.length > 0 && (
-                <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextIdx = (selectedFabricStripIndex - 1 + domeStrips.length) % domeStrips.length;
-                      setSelectedFabricStripIndex(nextIdx);
-                      if (onSetFabricStripFaceIds) onSetFabricStripFaceIds(domeStrips[nextIdx]);
-                    }}
-                    className="p-1 hover:bg-[#FEF3C7] rounded text-[#92400E] font-bold cursor-pointer"
-                    title="Попередня смуга"
-                  >
-                    ◄
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextIdx = (selectedFabricStripIndex + 1) % domeStrips.length;
-                      setSelectedFabricStripIndex(nextIdx);
-                      if (onSetFabricStripFaceIds) onSetFabricStripFaceIds(domeStrips[nextIdx]);
-                    }}
-                    className="p-1 hover:bg-[#FEF3C7] rounded text-[#92400E] font-bold cursor-pointer"
-                    title="Наступна смуга"
-                  >
-                    ►
-                  </button>
+      {conversionMode === "fabric_strip" && (
+        <div className="absolute top-20 sm:top-22 left-3 right-3 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150 max-w-[calc(100%-16px)] sm:max-w-2xl">
+          <div className="flex flex-col gap-2 p-3 rounded-2xl bg-[#FFFBEB]/95 backdrop-blur-md border border-[#FDE68A] shadow-lg text-xs text-[#92400E]">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Scissors className="w-4 h-4 text-[#D97706] shrink-0" />
+                <div>
+                  <span className="font-bold">Вибір смуги розкрою тканини / тенту:</span>
+                  <span className="text-[11px] text-[#B45309] block sm:inline sm:ml-1.5">
+                    Клацайте по суміжних трикутниках купола від основи до вершини
+                  </span>
                 </div>
-              )}
-              {isPlinthActive && (
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-mono font-bold text-[11px] bg-white px-2 py-1 rounded-lg border border-[#FDE68A] text-[#92400E]">
+                  {activeFabricStripFaceIds.length} трикутників
+                </span>
                 <button
                   type="button"
-                  onClick={() => setTentStripSelectionMode(m => m === "dome" ? "plinth" : "dome")}
-                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded cursor-pointer ${
-                    tentStripSelectionMode === "plinth"
-                      ? "bg-[#D97706] text-white"
-                      : "bg-[#FEF3C7] text-[#92400E] hover:bg-[#FDE68A]"
-                  }`}
-                  title="Переключити між смугою купола та поясом цоколя"
+                  onClick={() => setConversionMode("none")}
+                  className="p-1 text-[#92400E] hover:bg-white rounded-lg cursor-pointer"
+                  title="Закрити режим"
                 >
-                  {tentStripSelectionMode === "plinth" ? "Купол" : "Цоколь"}
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Action Toolbar */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-[#FDE68A]/70">
+              {activeWindowFaceIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onCopyWindowsToFabricStrip && onCopyWindowsToFabricStrip()}
+                  className="px-2 py-1 rounded-lg text-[10px] font-bold bg-[#0284C7] hover:bg-[#0369A1] text-white shadow-2xs cursor-pointer flex items-center gap-1"
+                  title="Скопіювати конфігурацію вікон як смугу тканини"
+                >
+                  <Sun className="w-3 h-3 text-amber-300" />
+                  <span>Взяти з вікон ({activeWindowFaceIds.length})</span>
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => setTentPanelMinimized(false)}
-                className="px-2 py-0.5 text-[10px] font-bold bg-[#D97706] hover:bg-[#B45309] text-white rounded-md cursor-pointer ml-1"
-                title="Розгорнути панель налаштувань тенту"
-              >
-                Розгорнути
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setConversionMode("none");
-                  if (renderMode === "tent") setRenderMode("beams");
-                }}
-                className="p-1 text-[#92400E] hover:bg-white rounded-lg cursor-pointer"
-                title="Закрити режим"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+
+              {activeFabricStripFaceIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onClearFabricStrip && onClearFabricStrip()}
+                  className="px-2 py-1 rounded-lg text-[10px] font-bold bg-white hover:bg-red-50 border border-red-200 text-red-600 cursor-pointer flex items-center gap-1"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Очистити</span>
+                </button>
+              )}
+
+              {onNavigateToSheathing && (
+                <button
+                  type="button"
+                  onClick={() => onNavigateToSheathing()}
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[#D97706] hover:bg-[#B45309] text-white shadow-2xs cursor-pointer ml-auto flex items-center gap-1"
+                >
+                  <span>До розкрою тенту →</span>
+                </button>
+              )}
             </div>
           </div>
-        ) : (
-          <div className="absolute top-16 sm:top-18 left-3 right-3 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150 max-w-[calc(100%-16px)] sm:max-w-xl pointer-events-auto">
-            <div className="flex flex-col gap-2 p-2.5 sm:p-3 rounded-2xl bg-[#FFFBEB]/95 backdrop-blur-md border border-[#FDE68A] shadow-lg text-xs text-[#92400E]">
-              {/* Header row */}
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-[#D97706] text-white flex items-center justify-center shrink-0 shadow-2xs">
-                    <Scissors className="w-3.5 h-3.5" />
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-bold text-xs text-[#92400E]">
-                      {tentStripSelectionMode === "plinth" ? "Пояс тенту цоколя (прямокутники)" : "Розкрій полоси тканини"}
-                    </span>
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#D97706] text-white shadow-2xs">
-                      Одним кольором
-                    </span>
-                    {isPlinthActive && (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]">
-                        Цоколь: {model.statistics.plinthHeightMm || model.parameters.plinth?.height || 800} мм
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1 shrink-0">
-                  <span className="font-mono font-bold text-[10px] bg-white px-2 py-0.5 rounded-lg border border-[#FDE68A] text-[#92400E]">
-                    {activeFabricStripFaceIds.length} тр.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setTentPanelMinimized(true)}
-                    className="p-1 text-[#92400E] hover:bg-[#FEF3C7] rounded-lg cursor-pointer"
-                    title="Згорнути панель (звільнити 3D огляд)"
-                  >
-                    <ChevronUp className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setConversionMode("none");
-                      if (renderMode === "tent") setRenderMode("beams");
-                    }}
-                    className="p-1 text-[#92400E] hover:bg-white rounded-lg cursor-pointer"
-                    title="Закрити режим тенту"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Mode switch (Dome Strip vs Plinth Band) + Stepper row */}
-              <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-[#FDE68A]/70 flex-wrap">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Dome vs Plinth selector if plinth is active */}
-                  {isPlinthActive && (
-                    <div className="flex items-center bg-[#FEF3C7] p-0.5 rounded-lg border border-[#FDE68A]">
-                      <button
-                        type="button"
-                        onClick={() => setTentStripSelectionMode("dome")}
-                        className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
-                          tentStripSelectionMode === "dome"
-                            ? "bg-[#D97706] text-white shadow-2xs"
-                            : "text-[#92400E] hover:text-[#B45309]"
-                        }`}
-                      >
-                        Купол
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTentStripSelectionMode("plinth")}
-                        className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
-                          tentStripSelectionMode === "plinth"
-                            ? "bg-[#D97706] text-white shadow-2xs"
-                            : "text-[#92400E] hover:text-[#B45309]"
-                        }`}
-                        title="Відобразити загальний пояс тенту цоколя з прямокутними секціями"
-                      >
-                        Пояс цоколя
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Dome strip stepper */}
-                  {tentStripSelectionMode === "dome" && domeStrips.length > 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-[11px] text-[#92400E]">Смуга:</span>
-                      <div className="flex items-center bg-white rounded-lg border border-[#FDE68A] shadow-2xs overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextIdx = (selectedFabricStripIndex - 1 + domeStrips.length) % domeStrips.length;
-                            setSelectedFabricStripIndex(nextIdx);
-                            if (onSetFabricStripFaceIds) onSetFabricStripFaceIds(domeStrips[nextIdx]);
-                          }}
-                          className="px-2 py-0.5 hover:bg-[#FEF3C7] text-[#92400E] font-bold cursor-pointer transition-colors"
-                          title="Попередня смуга розкрою"
-                        >
-                          ◄
-                        </button>
-                        <span className="px-2 py-0.5 font-mono font-bold text-[10px] text-[#B45309] bg-[#FFFBEB] whitespace-nowrap">
-                          #{selectedFabricStripIndex + 1} з {domeStrips.length}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextIdx = (selectedFabricStripIndex + 1) % domeStrips.length;
-                            setSelectedFabricStripIndex(nextIdx);
-                            if (onSetFabricStripFaceIds) onSetFabricStripFaceIds(domeStrips[nextIdx]);
-                          }}
-                          className="px-2 py-0.5 hover:bg-[#FEF3C7] text-[#92400E] font-bold cursor-pointer transition-colors"
-                          title="Наступна смуга розкрою"
-                        >
-                          ►
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Plinth info label when in plinth mode */}
-                  {tentStripSelectionMode === "plinth" && (
-                    <span className="text-[11px] font-bold text-[#92400E] bg-white px-2 py-0.5 rounded-lg border border-[#FDE68A]">
-                      {plinthFaceIds.length / 2} секцій прямокутників ({model.statistics.plinthWallAreaM2 || 0} м²)
-                    </span>
-                  )}
-
-                  {/* Toggle plinth belt together with dome strip */}
-                  {isPlinthActive && tentStripSelectionMode === "dome" && (
-                    <label className="flex items-center gap-1 cursor-pointer select-none text-[10px] font-bold text-[#92400E] ml-1">
-                      <input
-                        type="checkbox"
-                        checked={tentShowPlinthBand}
-                        onChange={e => setTentShowPlinthBand(e.target.checked)}
-                        className="rounded accent-[#D97706]"
-                      />
-                      <span>+ Пояс цоколя</span>
-                    </label>
-                  )}
-                </div>
-
-                {/* Single uniform color picker for the fabric strip */}
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] font-semibold text-[#92400E]">Колір:</span>
-                  <div className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-lg border border-[#FDE68A]">
-                    {TENT_STRIP_COLORS.map(c => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => setTentStripColor(c.hex)}
-                        className={`w-3.5 h-3.5 rounded-full border transition-all cursor-pointer ${
-                          tentStripColor === c.hex ? "scale-125 ring-2 ring-[#D97706] border-white shadow-xs" : "border-gray-300 hover:scale-110"
-                        }`}
-                        style={{ backgroundColor: c.hex }}
-                        title={`${c.name} — єдиний колір для розкрою полоси тканини`}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* View options and actions */}
-              <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-[#FDE68A]/70 flex-wrap">
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setTentShowFullDome(prev => !prev)}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-all flex items-center gap-1 ${
-                      tentShowFullDome
-                        ? "bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]"
-                        : "bg-white text-[#92400E] border border-[#FDE68A] hover:bg-[#FFFBEB]"
-                    }`}
-                    title={tentShowFullDome ? "Вимкнути напівпрозорий тент (показати лише смугу на каркасі)" : "Показати купол з напівпрозорою мембраною"}
-                  >
-                    {tentShowFullDome ? <Eye className="w-3 h-3 text-[#D97706]" /> : <EyeOff className="w-3 h-3 text-[#92400E]" />}
-                    <span>{tentShowFullDome ? "Тент (напівпрозорий)" : "Лише смуга розкрою"}</span>
-                  </button>
-
-                  {activeFabricStripFaceIds.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => onClearFabricStrip && onClearFabricStrip()}
-                      className="px-2 py-1 rounded-lg text-[10px] font-bold bg-white hover:bg-red-50 border border-red-200 text-red-600 cursor-pointer flex items-center gap-1"
-                      title="Очистити вибір граней"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      <span>Очистити</span>
-                    </button>
-                  )}
-                </div>
-
-                {onNavigateToSheathing && (
-                  <button
-                    type="button"
-                    onClick={() => onNavigateToSheathing()}
-                    className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[#D97706] hover:bg-[#B45309] text-white shadow-2xs cursor-pointer flex items-center gap-1 ml-auto"
-                  >
-                    <span>Креслення розкрою →</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )
+        </div>
       )}
 
       {showInnerSheathing && (
-        <div className="absolute top-16 sm:top-18 right-3 z-20 animate-in fade-in slide-in-from-top-2 duration-150">
+        <div className="absolute top-20 sm:top-22 right-3 z-20 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/95 backdrop-blur-md border border-[#CBD5E1] shadow-md text-xs text-[#334155]">
             <Home className="w-3.5 h-3.5 text-[#64748B]" />
             <span className="font-semibold text-[11px]">Внутрішня обшивка:</span>
@@ -4680,7 +5155,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
       {/* Active Window Mode Floating Helper Banner (Top-Center) */}
       {windowMode && (
-        <div className="absolute top-14 sm:top-16 left-1/2 -translate-x-1/2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-[#38BDF8] shadow-lg flex items-center gap-2 sm:gap-3 z-20 max-w-[calc(100%-24px)] animate-in fade-in slide-in-from-top-2 duration-200">
+        <div className="absolute top-20 sm:top-22 left-1/2 -translate-x-1/2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-[#38BDF8] shadow-lg flex items-center gap-2 sm:gap-3 z-20 max-w-[calc(100%-24px)] animate-in fade-in slide-in-from-top-2 duration-200">
           <div className="w-2 h-2 rounded-full bg-[#0284C7] animate-ping shrink-0" />
           <div className="text-[11px] sm:text-xs text-[#1A2E3B] truncate">
             <span className="font-bold text-[#0369A1]">Режим вікон: </span>
@@ -4932,100 +5407,15 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           </div>
         );
       })() : (selectedNodeId !== null || selectedEdgeId !== null) && (
-        <div className="absolute bottom-3 inset-x-3 sm:inset-x-auto sm:right-4 sm:bottom-4 px-3.5 sm:px-4 py-2 rounded-2xl tactile-card-mint backdrop-blur-md border border-white/80 flex items-center justify-between sm:justify-start gap-3 animate-in fade-in zoom-in-95 duration-200 z-10 max-w-lg shadow-md">
-          <div className="text-xs font-semibold text-[#1A3E26] flex-1">
-            {selectedNodeId !== null && (() => {
-              const selNode = model.nodes[selectedNodeId];
-              if (!selNode) return `Обрано Вузол #${selectedNodeId}`;
-              const tierLvl = selNode.tierLevel;
-              const isEligible = tierLvl !== undefined && tierLvl >= 2 && tierLvl <= 5;
-              const isAlreadyLeveled = selNode.isTierLeveled;
-              const isRefNode = model.parameters.tierLeveling?.[tierLvl ?? -1]?.referenceNodeId === selNode.id;
-
-              return (
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-[#1A3E26]">
-                      Вузол {selNode.label || `#${selNode.id}`}
-                    </span>
-                    {tierLvl !== undefined && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-300">
-                        {tierLvl}-й рівень
-                      </span>
-                    )}
-                    <span className="text-[11px] font-mono text-[#3D6B5D]">
-                      Z: {Math.round(selNode.position.z)} мм · R: {Math.round(Math.hypot(selNode.position.x, selNode.position.y))} мм
-                    </span>
-                  </div>
-
-                  {isEligible && onChangeParams && (
-                    <div className="flex items-center gap-1.5">
-                      {!isAlreadyLeveled ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onChangeParams({
-                              ...model.parameters,
-                              tierLeveling: {
-                                ...model.parameters.tierLeveling,
-                                [tierLvl]: {
-                                  level: tierLvl,
-                                  enabled: true,
-                                  referenceNodeId: selNode.id,
-                                  referenceNodeLabel: selNode.label,
-                                  targetZ: Math.round(selNode.position.z * 10) / 10,
-                                  radialMode: model.parameters.tierLeveling?.[tierLvl]?.radialMode || "vertical"
-                                }
-                              }
-                            });
-                          }}
-                          className="px-2 py-0.5 text-[10px] font-bold rounded-lg bg-[#10B981] hover:bg-[#059669] text-white shadow-2xs transition-all flex items-center gap-1"
-                          title="Вирівняти всі вузли цього рівня по висоті даного вузла для облаштування другого поверху"
-                        >
-                          <span>⚡ Вирівняти {tierLvl}-й рівень (2-й поверх)</span>
-                        </button>
-                      ) : (
-                        <div className="flex items-center gap-1">
-                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-300">
-                            {isRefNode ? "★ Базовий вузол" : `✓ ${tierLvl}-й рівень вирівняно`}
-                          </span>
-                          {!isRefNode && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onChangeParams({
-                                  ...model.parameters,
-                                  tierLeveling: {
-                                    ...model.parameters.tierLeveling,
-                                    [tierLvl]: {
-                                      level: tierLvl,
-                                      enabled: true,
-                                      referenceNodeId: selNode.id,
-                                      referenceNodeLabel: selNode.label,
-                                      targetZ: Math.round(selNode.position.z * 10) / 10,
-                                      radialMode: model.parameters.tierLeveling?.[tierLvl]?.radialMode || "vertical"
-                                    }
-                                  }
-                                });
-                              }}
-                              className="px-1.5 py-0.5 text-[9px] font-bold rounded-md bg-white hover:bg-emerald-50 text-[#047857] border border-[#86EFAC] shadow-2xs"
-                            >
-                              Зробити базовим
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+        <div className="absolute bottom-3 inset-x-3 sm:inset-x-auto sm:right-4 sm:bottom-4 px-3.5 sm:px-4 py-2 rounded-2xl tactile-card-mint backdrop-blur-md border border-white/80 flex items-center justify-between sm:justify-start gap-3 animate-in fade-in zoom-in-95 duration-200 z-10 max-w-md">
+          <span className="text-xs font-semibold text-[#1A3E26] truncate">
+            {selectedNodeId !== null && `Обрано Вузол #${selectedNodeId}`}
             {selectedEdgeId !== null && (() => {
               const e = model.edges[selectedEdgeId];
               const cutL = e.cutLength || Math.round(e.length - model.connectorParams.hubDiameter);
               return `Балка #${selectedEdgeId} (${e?.type}) · L: ${e?.length} мм · Обріз: ${cutL} мм`;
             })()}
-          </div>
+          </span>
           <button
             onClick={() => {
               onSelectNode(null);
@@ -5070,12 +5460,56 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         </div>
       )}
 
+      {/* Toast notification when video recording completes from floating bar */}
+      {recordedVideoUrl && !isRecording && !isVideoModalOpen && (
+        <div className="absolute bottom-16 sm:bottom-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-[#1B4D2E]/95 text-white backdrop-blur-md shadow-2xl border border-emerald-400/40 text-xs animate-in fade-in slide-in-from-bottom-2 max-w-[95%]">
+          <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+          <span className="font-semibold whitespace-nowrap">Відео 360° обльоту збережено!</span>
+          <a
+            href={recordedVideoUrl}
+            download={`geodome-orbit360-${model.parameters.frequency}V-${model.parameters.diameter}mm.webm`}
+            className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-xl flex items-center gap-1 shadow-sm transition-all whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Завантажити</span>
+          </a>
+          <button
+            type="button"
+            onClick={() => setIsVideoModalOpen(true)}
+            className="px-2.5 py-1 bg-white/20 hover:bg-white/30 text-white font-bold rounded-xl transition-all whitespace-nowrap"
+          >
+            Переглянути
+          </button>
+          <button
+            type="button"
+            onClick={() => setRecordedVideoUrl(null)}
+            className="p-1 hover:bg-white/20 rounded-lg text-white/70 hover:text-white"
+            title="Закрити сповіщення"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* AR Preview Modal */}
       <ARModal
         model={model}
         plywoodThickness={plywoodThickness}
         isOpen={isARModalOpen}
         onClose={() => setIsARModalOpen(false)}
+      />
+
+      {/* 3D Video Studio & Motion Recording Modal */}
+      <VideoExportModal
+        isOpen={isVideoModalOpen}
+        onClose={() => setIsVideoModalOpen(false)}
+        model={model}
+        onStartRecording={handleStartRecording}
+        onStopRecording={handleStopRecording}
+        isRecording={isRecording}
+        recordingProgress={recordingProgress}
+        recordedVideoUrl={recordedVideoUrl}
+        onTakeHighResSnapshot={handleTakeHighResSnapshot}
       />
     </div>
   );
