@@ -51,7 +51,8 @@ import {
   Flame,
   TrendingUp,
   Leaf,
-  MapPin
+  MapPin,
+  PieChart
 } from "lucide-react";
 
 interface ParamControlsProps {
@@ -136,13 +137,47 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
   onSelectNode
 }) => {
   const [activeTierTab, setActiveTierTab] = React.useState<number>(3);
-  const frequencies: Frequency[] = [1, 2, 3, 4, 5, 6];
-  const cutOptions: { id: DomeCutType; label: string; desc: string }[] = [
-    { id: "1/2", label: "1/2", desc: "Півсфера (класика)" },
-    { id: "3/8", label: "3/8", desc: "Низький купол" },
-    { id: "5/8", label: "5/8", desc: "Високий купол" },
-    { id: "7/12", label: "7/12", desc: "Оптимальна стіна" }
+  const frequencies: Frequency[] = [1, 2, 3, 4, 5, 6, 7, 8];
+  const cutOptions: { id: DomeCutType; label: string; short: string; name: string; desc: string; percent: number }[] = [
+    { id: "1/1", label: "1/1", short: "Сфера", name: "Повна сфера (1/1)", desc: "Повна замкнута оболонка 360° (H = 100% Ø)", percent: 100 },
+    { id: "5/6", label: "5/6", short: "5/6", name: "Глибокий купол (5/6)", desc: "Високий купол / оранжерея (H = 83.3% Ø)", percent: 83.3 },
+    { id: "3/4", label: "3/4", short: "3/4", name: "Павільйон (3/4)", desc: "Краплеподібний павільйон (H = 75% Ø)", percent: 75 },
+    { id: "5/8", label: "5/8", short: "5/8", name: "Купол 5/8", desc: "Популярний житловий купол (H = 62.5% Ø)", percent: 62.5 },
+    { id: "7/12", label: "7/12", short: "7/12", name: "Стіна 7/12", desc: "Оптимальний нахил стіни (H = 58.3% Ø)", percent: 58.3 },
+    { id: "1/2", label: "1/2", short: "Півсфера", name: "Півсфера (1/2)", desc: "Класична напівсфера 180° (H = 50% Ø)", percent: 50 },
+    { id: "5/12", label: "5/12", short: "5/12", name: "Пологий (5/12)", desc: "Пологий купол з широкою площею (H = 41.7% Ø)", percent: 41.7 },
+    { id: "3/8", label: "3/8", short: "3/8", name: "Низький (3/8)", desc: "Низький купол / шатро (H = 37.5% Ø)", percent: 37.5 },
+    { id: "1/4", label: "1/4", short: "1/4", name: "Навіс (1/4)", desc: "Плоский купольний навіс (H = 25% Ø)", percent: 25 },
+    { id: "1/6", label: "1/6", short: "1/6", name: "Мілкий дах (1/6)", desc: "Мілке блюдце / ліхтар даху (H = 16.7% Ø)", percent: 16.7 }
   ];
+
+  const handleSelectCut = (cutId: DomeCutType) => {
+    const isEllip = params.shapeType === "ellipsoid";
+    const refDiam = isEllip
+      ? (params.ellipsoidLengthX || params.diameter || 8000)
+      : (params.diameter || 8000);
+    const refZRadius = isEllip
+      ? (params.ellipsoidHeightZ || params.height || 4000)
+      : refDiam / 2;
+
+    let computedHeight = params.height;
+    if (cutId === "1/1") computedHeight = refZRadius * 2;
+    else if (cutId === "5/6") computedHeight = Math.round((refZRadius * 2 * 5) / 6);
+    else if (cutId === "3/4") computedHeight = Math.round((refZRadius * 2 * 3) / 4);
+    else if (cutId === "5/8") computedHeight = Math.round((refZRadius * 2 * 5) / 8);
+    else if (cutId === "7/12") computedHeight = Math.round((refZRadius * 2 * 7) / 12);
+    else if (cutId === "1/2") computedHeight = Math.round(refZRadius);
+    else if (cutId === "5/12") computedHeight = Math.round((refZRadius * 2 * 5) / 12);
+    else if (cutId === "3/8") computedHeight = Math.round((refZRadius * 2 * 3) / 8);
+    else if (cutId === "1/4") computedHeight = Math.round((refZRadius * 2 * 1) / 4);
+    else if (cutId === "1/6") computedHeight = Math.round((refZRadius * 2 * 1) / 6);
+
+    onChangeParams({
+      ...params,
+      cutType: cutId,
+      height: computedHeight
+    });
+  };
 
   // Material & Coating logic
   const currentMatId = (connectorParams.material as ConnectorMaterialId) || "steel_st3";
@@ -435,12 +470,64 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
         </div>
       </div>
 
-      {/* Frequency 1V - 6V Tabs */}
+      {/* Dome Shape Selector: Sphere vs Ellipsoid */}
+      <div className="p-3.5 rounded-2xl tactile-card border border-white/80">
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs font-bold tracking-wide text-[#5A6778] uppercase flex items-center gap-1.5">
+            <Box className="w-3.5 h-3.5 text-[#5B9279]" />
+            <span>Форма купола</span>
+          </label>
+          <span className="text-[11px] font-mono text-[#5A6778]">
+            {params.shapeType === "ellipsoid" ? "Еліпсоїд / Овал" : "Класична сфера"}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl tactile-inset">
+          <button
+            type="button"
+            onClick={() => onChangeParams({ ...params, shapeType: "sphere" })}
+            className={`py-1.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              params.shapeType !== "ellipsoid"
+                ? "bg-[#FAF7F2] text-[#1A3E26] shadow-xs"
+                : "text-[#5A6778] hover:text-[#1A2E3B]"
+            }`}
+          >
+            <Circle className="w-3.5 h-3.5" />
+            <span>Сфера</span>
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              onChangeParams({
+                ...params,
+                shapeType: "ellipsoid",
+                ellipsoidLengthX: params.ellipsoidLengthX || params.diameter || 8000,
+                ellipsoidWidthY: params.ellipsoidWidthY || Math.round((params.diameter || 8000) * 0.75),
+                ellipsoidHeightZ: params.ellipsoidHeightZ || params.height || 4000
+              })
+            }
+            className={`py-1.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              params.shapeType === "ellipsoid"
+                ? "bg-[#FAF7F2] text-[#DE7C5A] shadow-xs"
+                : "text-[#5A6778] hover:text-[#1A2E3B]"
+            }`}
+          >
+            <Disc className="w-3.5 h-3.5" />
+            <span>Еліпсоїд (Овал)</span>
+          </button>
+        </div>
+        {params.shapeType === "ellipsoid" && (
+          <div className="mt-2.5 p-2 rounded-xl bg-[#FAF2DE] border border-[#EADBBD] text-[11px] text-[#7A5826] leading-relaxed">
+            <span className="font-bold">Інженерне маркування:</span> У формі еліпсоїда кожна деталь отримує унікальний індекс (<code className="font-mono font-bold text-[#DE7C5A]">E-001...Ennn</code>) та групується за 4 квадрантами симетрії (<code className="font-mono font-bold">Q1–Q4</code>).
+          </div>
+        )}
+      </div>
+
+      {/* Frequency 1V - 8V Tabs */}
       <div>
         <label className="text-xs font-bold tracking-wide text-[#5A6778] mb-2 block uppercase">
           Частота розбивки (V)
         </label>
-        <div className="grid grid-cols-6 gap-1.5 p-1.5 rounded-2xl tactile-inset">
+        <div className="grid grid-cols-8 gap-1.5 p-1.5 rounded-2xl tactile-inset">
           {frequencies.map(f => (
             <button
               key={f}
@@ -457,12 +544,128 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
         </div>
       </div>
 
-      {/* Diameter & Height Sliders */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Diameter */}
+      {/* Dimensions: 3-Axis for Ellipsoid, or Diameter & Height for Sphere */}
+      {params.shapeType === "ellipsoid" ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Axis X: Length */}
+          <div className="p-3.5 rounded-2xl tactile-inset-subtle border border-white/60">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-[#5A6778]">Вісь X (Довжина)</span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={1.0}
+                  max={30.0}
+                  step={0.1}
+                  value={Number(((params.ellipsoidLengthX || params.diameter || 8000) / 1000).toFixed(2))}
+                  onChange={e => {
+                    const valMeters = parseFloat(e.target.value);
+                    if (!isNaN(valMeters) && valMeters >= 0.5 && valMeters <= 30) {
+                      onChangeParams({ ...params, ellipsoidLengthX: Math.round(valMeters * 1000) });
+                    }
+                  }}
+                  className="w-16 px-1.5 py-0.5 text-xs font-mono font-bold text-right text-[#1A2E3B] bg-white rounded-lg border border-[#DCD6CA] outline-none shadow-2xs"
+                />
+                <span className="text-xs font-mono font-bold text-[#1A2E3B]">м</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={1000}
+              max={30000}
+              step={100}
+              value={params.ellipsoidLengthX || params.diameter || 8000}
+              onChange={e => onChangeParams({ ...params, ellipsoidLengthX: Number(e.target.value) })}
+              className="w-full accent-[#DE7C5A] cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-[#8C9BAE] mt-1 font-mono">
+              <span>1.0 м</span>
+              <span>15.0 м</span>
+              <span>30.0 м</span>
+            </div>
+          </div>
+
+          {/* Axis Y: Width */}
+          <div className="p-3.5 rounded-2xl tactile-inset-subtle border border-white/60">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-[#5A6778]">Вісь Y (Ширина)</span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={1.0}
+                  max={30.0}
+                  step={0.1}
+                  value={Number(((params.ellipsoidWidthY || Math.round((params.diameter || 8000) * 0.75)) / 1000).toFixed(2))}
+                  onChange={e => {
+                    const valMeters = parseFloat(e.target.value);
+                    if (!isNaN(valMeters) && valMeters >= 0.5 && valMeters <= 30) {
+                      onChangeParams({ ...params, ellipsoidWidthY: Math.round(valMeters * 1000) });
+                    }
+                  }}
+                  className="w-16 px-1.5 py-0.5 text-xs font-mono font-bold text-right text-[#1A2E3B] bg-white rounded-lg border border-[#DCD6CA] outline-none shadow-2xs"
+                />
+                <span className="text-xs font-mono font-bold text-[#1A2E3B]">м</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={1000}
+              max={30000}
+              step={100}
+              value={params.ellipsoidWidthY || Math.round((params.diameter || 8000) * 0.75)}
+              onChange={e => onChangeParams({ ...params, ellipsoidWidthY: Number(e.target.value) })}
+              className="w-full accent-[#DE7C5A] cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-[#8C9BAE] mt-1 font-mono">
+              <span>1.0 м</span>
+              <span>15.0 м</span>
+              <span>30.0 м</span>
+            </div>
+          </div>
+
+          {/* Axis Z: Height */}
+          <div className="p-3.5 rounded-2xl tactile-inset-subtle border border-white/60">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-[#5A6778]">Вісь Z (Висота)</span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={0.5}
+                  max={15.0}
+                  step={0.1}
+                  value={Number(((params.ellipsoidHeightZ || params.height || 4000) / 1000).toFixed(2))}
+                  onChange={e => {
+                    const valMeters = parseFloat(e.target.value);
+                    if (!isNaN(valMeters) && valMeters >= 0.5 && valMeters <= 15) {
+                      onChangeParams({ ...params, ellipsoidHeightZ: Math.round(valMeters * 1000) });
+                    }
+                  }}
+                  className="w-16 px-1.5 py-0.5 text-xs font-mono font-bold text-right text-[#1A2E3B] bg-white rounded-lg border border-[#DCD6CA] outline-none shadow-2xs"
+                />
+                <span className="text-xs font-mono font-bold text-[#1A2E3B]">м</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={500}
+              max={15000}
+              step={50}
+              value={params.ellipsoidHeightZ || params.height || 4000}
+              onChange={e => onChangeParams({ ...params, ellipsoidHeightZ: Number(e.target.value) })}
+              className="w-full accent-[#DE7C5A] cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-[#8C9BAE] mt-1 font-mono">
+              <span>0.5 м</span>
+              <span>7.5 м</span>
+              <span>15.0 м</span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Sphere Diameter */
         <div className="p-3.5 rounded-2xl tactile-inset-subtle border border-white/60">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-semibold text-[#5A6778]">Діаметр основи</span>
+            <span className="text-xs font-semibold text-[#5A6778]">Діаметр сфери</span>
             <div className="flex items-center gap-1.5">
               <input
                 type="number"
@@ -473,7 +676,13 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
                 onChange={e => {
                   const valMeters = parseFloat(e.target.value);
                   if (!isNaN(valMeters) && valMeters >= 0.15 && valMeters <= 24) {
-                    onChangeParams({ ...params, diameter: Math.round(valMeters * 1000) });
+                    const newDiam = Math.round(valMeters * 1000);
+                    const ratio = (params.height || 4000) / (params.diameter || 8000);
+                    onChangeParams({
+                      ...params,
+                      diameter: newDiam,
+                      height: Math.round(newDiam * (ratio || 0.5))
+                    });
                   }
                 }}
                 className="w-16 px-1.5 py-0.5 text-xs font-mono font-bold text-right text-[#1A2E3B] bg-white rounded-lg border border-[#DCD6CA] outline-none shadow-2xs"
@@ -489,11 +698,19 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
             max={24000}
             step={10}
             value={params.diameter}
-            onChange={e => onChangeParams({ ...params, diameter: Number(e.target.value) })}
+            onChange={e => {
+              const newDiam = Number(e.target.value);
+              const ratio = (params.height || 4000) / (params.diameter || 8000);
+              onChangeParams({
+                ...params,
+                diameter: newDiam,
+                height: Math.round(newDiam * (ratio || 0.5))
+              });
+            }}
             className="w-full accent-[#5B9279] cursor-pointer"
           />
           <div className="flex justify-between text-[10px] text-[#8C9BAE] mt-1 font-mono">
-            <span className="text-[#2E7D32] font-semibold">15 см (0.15 м)</span>
+            <span className="text-[#2E7D32] font-semibold">15 см (макет)</span>
             <span>4.0 м</span>
             <span>12.0 м</span>
             <span>24.0 м</span>
@@ -513,7 +730,14 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
               <button
                 key={preset.d}
                 type="button"
-                onClick={() => onChangeParams({ ...params, diameter: preset.d })}
+                onClick={() => {
+                  const ratio = (params.height || 4000) / (params.diameter || 8000);
+                  onChangeParams({
+                    ...params,
+                    diameter: preset.d,
+                    height: Math.round(preset.d * (ratio || 0.5))
+                  });
+                }}
                 className={`px-2 py-0.5 text-[10px] font-mono rounded-lg transition-all ${
                   Math.abs(params.diameter - preset.d) < 50
                     ? "bg-[#5B9279] text-white font-bold shadow-2xs"
@@ -525,32 +749,184 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
             ))}
           </div>
         </div>
+      )}
 
-        {/* Height Cut Ratio */}
-        <div className="p-3.5 rounded-2xl tactile-inset-subtle border border-white/60">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-semibold text-[#5A6778]">Висота купола</span>
-            <span className="text-xs font-mono font-bold text-[#1A2E3B]">
-              {(params.height / 1000).toFixed(2)} м
-              {params.height < 1000 ? ` (${(params.height / 10).toFixed(params.height % 10 === 0 ? 0 : 1)} см)` : ""}
+      {/* Dome Division & Sphere Fraction (Ділення сферичного купола / Сфери) */}
+      <div className="p-4 rounded-2xl tactile-card-subtle border border-white/70">
+        <div className="flex items-center justify-between mb-2.5">
+          <label className="text-xs font-bold tracking-wide text-[#5A6778] uppercase flex items-center gap-1.5">
+            <PieChart className="w-3.5 h-3.5 text-[#5B9279]" />
+            <span>Ділення купола (Частина сфери)</span>
+          </label>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-mono font-bold text-[#1A2E3B] bg-[#FAF7F2] px-2 py-0.5 rounded-md border border-[#E4DED3] shadow-2xs">
+              {params.cutType === "1/1"
+                ? "1/1 Сфера (100%)"
+                : `${params.cutType} (${cutOptions.find(c => c.id === params.cutType)?.percent || 50}%)`}
+              {" · "}
+              {((model?.parameters?.height || params.height) / 1000).toFixed(2)} м
             </span>
           </div>
-          <div className="grid grid-cols-4 gap-1 p-1 rounded-xl tactile-inset">
-            {cutOptions.map(c => (
+        </div>
+
+        {/* Visual sphere fraction fullness bar */}
+        <div className="w-full bg-[#E8E2D8] h-2 rounded-full overflow-hidden mb-3">
+          <div
+            className={`h-full transition-all duration-300 rounded-full ${
+              params.shapeType === "ellipsoid" ? "bg-[#DE7C5A]" : "bg-[#5B9279]"
+            }`}
+            style={{
+              width: `${Math.min(
+                100,
+                cutOptions.find(c => c.id === params.cutType)?.percent || 50
+              )}%`
+            }}
+          />
+        </div>
+
+        {/* 10 Division buttons in responsive grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1.5 rounded-2xl tactile-inset">
+          {cutOptions.map(c => {
+            const isSelected = params.cutType === c.id;
+            const isFullSphere = c.id === "1/1";
+            return (
               <button
                 key={c.id}
-                onClick={() => onChangeParams({ ...params, cutType: c.id })}
-                className={`py-1 text-xs font-semibold rounded-lg transition-all ${
-                  params.cutType === c.id
-                    ? "bg-[#FAF7F2] text-[#1A2E3B] shadow-xs"
-                    : "text-[#5A6778] hover:text-[#1A2E3B]"
-                }`}
+                type="button"
+                onClick={() => handleSelectCut(c.id)}
+                className={`py-2 px-2 rounded-xl transition-all flex flex-col items-center justify-center cursor-pointer text-center ${
+                  isSelected
+                    ? params.shapeType === "ellipsoid"
+                      ? "bg-[#FAF7F2] text-[#DE7C5A] font-bold shadow-xs border border-[#DE7C5A]/30"
+                      : "bg-[#FAF7F2] text-[#1A3E26] font-bold shadow-xs border border-[#5B9279]/30"
+                    : "text-[#5A6778] hover:text-[#1A2E3B] hover:bg-white/40"
+                } ${isFullSphere ? "relative overflow-hidden" : ""}`}
                 title={c.desc}
               >
-                {c.label}
+                {isFullSphere && (
+                  <span className="absolute top-0 right-0 w-2 h-2 bg-[#5B9279] rounded-bl" />
+                )}
+                <span className="text-xs font-mono font-bold leading-tight flex items-center gap-1">
+                  {c.label}
+                  {isFullSphere && <Circle className="w-2.5 h-2.5 inline text-[#5B9279]" />}
+                </span>
+                <span className="text-[10px] opacity-80 leading-tight mt-0.5 truncate max-w-full">
+                  {c.short}
+                </span>
+                <span className="text-[9px] font-mono text-[#8C9BAE] mt-0.5">
+                  {c.percent}%
+                </span>
               </button>
-            ))}
+            );
+          })}
+        </div>
+
+        {/* Informative description of selected cut */}
+        <div className="mt-2.5 px-3 py-2 rounded-xl bg-white/70 border border-[#E8E2D8] text-[11px] text-[#5A6778] leading-relaxed flex items-start gap-2">
+          <Info className="w-3.5 h-3.5 text-[#5B9279] shrink-0 mt-0.5" />
+          <div>
+            {params.cutType === "1/1" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Повна сфера (1/1):</strong> Замкнута геодезична оболонка 360°. Без відкритих нижніх контурів, призначена для купольних скульптур, виставкових сфер, планетаріїв та підвісних каркасів.
+              </span>
+            )}
+            {params.cutType === "5/6" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Глибокий купол (5/6):</strong> Висока форма склепіння (~83.3% діаметра) для оранжерей та павільйонів з великим внутрішнім об'ємом.
+              </span>
+            )}
+            {params.cutType === "3/4" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Павільйон (3/4):</strong> Краплеподібний високий купол (75% діаметра) з піднятим склепінням.
+              </span>
+            )}
+            {params.cutType === "5/8" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Купол 5/8:</strong> Популярна висока форма для житлових будинків (62.5% діаметра) — вертикальніші стіни на рівні росту.
+              </span>
+            )}
+            {params.cutType === "7/12" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Купол 7/12:</strong> Оптимальний баланс (58.3% діаметра) з вертикальним нахилом периметру.
+              </span>
+            )}
+            {params.cutType === "1/2" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Півсфера (1/2):</strong> Класичний геодезичний купол (50% діаметра) з найвищою конструктивною жорсткістю та максимальним співвідношенням об'єму до площі.
+              </span>
+            )}
+            {params.cutType === "5/12" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Пологий купол (5/12):</strong> Знижений профіль (41.7% діаметра) з широкою площею підлоги.
+              </span>
+            )}
+            {params.cutType === "3/8" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Низький купол (3/8):</strong> Шатровий пологий купол (37.5% діаметра) для альтанок і низьких навісів.
+              </span>
+            )}
+            {params.cutType === "1/4" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Плоский навіс (1/4):</strong> Купольне перекриття (25% діаметра) для павільйонів і терас.
+              </span>
+            )}
+            {params.cutType === "1/6" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Мілкий дах (1/6):</strong> Мілке блюдце-ліхтар (16.7% діаметра) для покрівель круглих споруд.
+              </span>
+            )}
+            {params.cutType === "exact" && (
+              <span>
+                <strong className="text-[#1A2E3B]">Власна висота:</strong> Індивідуальний зріз на точну висоту в міліметрах.
+              </span>
+            )}
           </div>
+        </div>
+
+        {/* Custom Exact Height Slider */}
+        <div className="mt-3 pt-3 border-t border-[#E8E2D8]/80">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-semibold text-[#5A6778] flex items-center gap-1.5">
+              <span>Точне підлаштування висоти (Z)</span>
+            </span>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min={0.2}
+                max={24.0}
+                step={0.05}
+                value={Number((params.height / 1000).toFixed(2))}
+                onChange={e => {
+                  const valMeters = parseFloat(e.target.value);
+                  if (!isNaN(valMeters) && valMeters >= 0.1 && valMeters <= 30) {
+                    onChangeParams({
+                      ...params,
+                      cutType: "exact",
+                      height: Math.round(valMeters * 1000)
+                    });
+                  }
+                }}
+                className="w-16 px-1.5 py-0.5 text-xs font-mono font-bold text-right text-[#1A2E3B] bg-white rounded-lg border border-[#DCD6CA] outline-none shadow-2xs"
+              />
+              <span className="text-xs font-mono font-bold text-[#1A2E3B]">м</span>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={Math.round((params.shapeType === "ellipsoid" ? (params.ellipsoidHeightZ || 4000) : params.diameter / 2) * 0.2)}
+            max={Math.round((params.shapeType === "ellipsoid" ? (params.ellipsoidHeightZ || 4000) * 2 : params.diameter) * 1.0)}
+            step={20}
+            value={params.height}
+            onChange={e => {
+              const newH = Number(e.target.value);
+              onChangeParams({
+                ...params,
+                cutType: "exact",
+                height: newH
+              });
+            }}
+            className="w-full accent-[#5B9279] cursor-pointer"
+          />
         </div>
       </div>
 
@@ -589,8 +965,9 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
               </span>
             </div>
             <p className="text-[11px] text-[#3D6B5D] mt-0.5 leading-snug">
-              Усуває хвилясті зазори сферичного зрізу та формує рівний горизонтальний опорний пояс
-              брусів для встановлення на плоский фундамент або плиту.
+              {params.shapeType === "ellipsoid"
+                ? "Основа автоматично підлаштовується під середину еліпсу (довжину X та ширину Y) без розбігання по краях та формує точний контур опорного поясу."
+                : "Усуває хвилясті зазори сферичного зрізу та формує рівний горизонтальний опорний пояс брусів для встановлення на плоский фундамент або плиту."}
             </p>
           </div>
         </label>

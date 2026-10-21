@@ -33,7 +33,15 @@ const BEAM_PALETTE = [
   "#7B6D8D", // Heather Purple
   "#3D6B5D", // Deep Forest
   "#B56576", // Dusty Rose
-  "#6D8B74"  // Olive
+  "#6D8B74", // Olive
+  "#2A9D8F", // Teal
+  "#E76F51", // Burnt Coral
+  "#F4A261", // Sandy Gold
+  "#457B9D", // Steel Blue
+  "#8338EC", // Iris Violet
+  "#3A86FF", // Azure Blue
+  "#FB5607", // Tangerine
+  "#06D6A0"  // Emerald
 ];
 
 const FACE_PALETTE = [
@@ -45,13 +53,25 @@ const FACE_PALETTE = [
   "#E3ECE7"  // Sage soft
 ];
 
+function getTypeName(idx: number): string {
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  if (idx < 26) return letters[idx];
+  const first = letters[Math.floor(idx / 26) - 1];
+  const second = letters[idx % 26];
+  return `${first}${second}`;
+}
+
 export function buildTopology(
   vertices: Vec3[],
   rawFaces: { a: number; b: number; c: number }[],
   cutPlaneZ: number,
   outerOffset = 0,
   sphereCenterZ = 0,
-  sphereRadius = 0
+  sphereRadius = 0,
+  shapeType: "sphere" | "ellipsoid" = "sphere",
+  radX = 0,
+  radY = 0,
+  radZ = 0
 ): Topology {
   const nodes: Node[] = vertices.map((position, id) => ({
     id,
@@ -186,10 +206,9 @@ export function buildTopology(
   lengthClusters.sort((a, b) => a.length - b.length);
 
   const beamGroups: BeamTypeGroup[] = [];
-  const typeLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
   lengthClusters.forEach((cluster, idx) => {
-    const typeName = typeLetters[idx % typeLetters.length];
+    const typeName = getTypeName(idx);
     const color = BEAM_PALETTE[idx % BEAM_PALETTE.length];
     const avgLen = Math.round(cluster.length * 10) / 10;
     const isBase = cluster.edgeIds.some(eid => edges[eid].isBaseBeam);
@@ -209,6 +228,77 @@ export function buildTopology(
       isBaseBeam: isBase
     });
   });
+
+  const rx = radX > 0 ? radX : (sphereRadius || 4000);
+  const ry = radY > 0 ? radY : (sphereRadius || 4000);
+  const rz = radZ > 0 ? radZ : (sphereRadius || 4000);
+
+  // Helper to compute surface normal at a node (spherical or ellipsoid)
+  function getNodeNormal(pos: Vec3): Vec3 {
+    if (shapeType === "ellipsoid") {
+      const nx = pos.x / (rx * rx);
+      const ny = pos.y / (ry * ry);
+      const nz = pos.z / (rz * rz);
+      const len = Math.hypot(nx, ny, nz);
+      return len > 0.00001 ? { x: nx / len, y: ny / len, z: nz / len } : { x: 0, y: 0, z: 1 };
+    }
+    const len = Math.hypot(pos.x, pos.y, pos.z - sphereCenterZ);
+    return len > 0.00001
+      ? { x: pos.x / len, y: pos.y / len, z: (pos.z - sphereCenterZ) / len }
+      : { x: 0, y: 0, z: 1 };
+  }
+
+  // Populate individual beam attributes: beamLabel, quadrant, miter & bevel angles
+  for (let i = 0; i < edges.length; i++) {
+    const edge = edges[i];
+    edge.beamLabel = `E-${String(edge.id + 1).padStart(3, "0")}`;
+
+    const pA = vertices[edge.start];
+    const pB = vertices[edge.end];
+    const midX = (pA.x + pB.x) / 2;
+    const midY = (pA.y + pB.y) / 2;
+
+    if (midX >= 0 && midY >= 0) {
+      edge.quadrant = "Q1";
+    } else if (midX < 0 && midY >= 0) {
+      edge.quadrant = "Q2";
+    } else if (midX < 0 && midY < 0) {
+      edge.quadrant = "Q3";
+    } else {
+      edge.quadrant = "Q4";
+    }
+
+    // Strut direction vector A -> B
+    const dAB = { x: pB.x - pA.x, y: pB.y - pA.y, z: pB.z - pA.z };
+    const lenAB = Math.hypot(dAB.x, dAB.y, dAB.z) || 1;
+    const dirAB = { x: dAB.x / lenAB, y: dAB.y / lenAB, z: dAB.z / lenAB };
+
+    const normA = getNodeNormal(pA);
+    const normB = getNodeNormal(pB);
+
+    // Miter angle at A: angle from perpendicular to hub normal
+    const dotA = Math.max(-1, Math.min(1, dirAB.x * normA.x + dirAB.y * normA.y + dirAB.z * normA.z));
+    const angleRadA = Math.acos(dotA);
+    const miterA = Math.round(Math.abs(90 - (angleRadA * 180) / Math.PI) * 10) / 10;
+
+    // Miter angle at B: direction is B -> A (-dirAB)
+    const dotB = Math.max(-1, Math.min(1, -dirAB.x * normB.x - dirAB.y * normB.y - dirAB.z * normB.z));
+    const angleRadB = Math.acos(dotB);
+    const miterB = Math.round(Math.abs(90 - (angleRadB * 180) / Math.PI) * 10) / 10;
+
+    edge.startMiterDeg = miterA;
+    edge.endMiterDeg = miterB;
+    edge.bevelDeg = Math.round(Math.max(miterA, miterB) * 0.72 * 10) / 10;
+  }
+
+  // Update beamGroups sample angles
+  for (const group of beamGroups) {
+    const sample = edges.find(e => e.type === group.type);
+    if (sample) {
+      group.endAngleStart = sample.startMiterDeg || 0;
+      group.endAngleEnd = sample.endMiterDeg || 0;
+    }
+  }
 
   // Assign unique engineering node markings: [BeamTypeLetters][UniqueOrderNumber]
   // e.g. "AA1", "AA2", "AB3", where letters denote the breakdown strut types meeting at the node,

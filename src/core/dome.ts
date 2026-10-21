@@ -30,6 +30,14 @@ export function generateDome(
   }
 
   const radius = diameter / 2;
+  const isEllipsoid = parameters.shapeType === "ellipsoid";
+  const lenX = parameters.ellipsoidLengthX && parameters.ellipsoidLengthX > 0 ? parameters.ellipsoidLengthX : diameter;
+  const widY = parameters.ellipsoidWidthY && parameters.ellipsoidWidthY > 0 ? parameters.ellipsoidWidthY : diameter;
+  const hgtZ = parameters.ellipsoidHeightZ && parameters.ellipsoidHeightZ > 0 ? parameters.ellipsoidHeightZ : height;
+
+  const radX = isEllipsoid ? lenX / 2 : radius;
+  const radY = isEllipsoid ? widY / 2 : radius;
+  const radZ = isEllipsoid ? hgtZ : radius;
 
   // 1. Subdivide icosahedron
   const subdivision = subdivideIcosahedron(
@@ -38,45 +46,59 @@ export function generateDome(
     frequency
   );
 
-  // 2. Scale to millimeter radius
+  // 2. Scale to millimeter semi-axes (sphere or ellipsoid)
   const scaledVertices = subdivision.vertices.map(v => ({
-    x: v.x * radius,
-    y: v.y * radius,
-    z: v.z * radius
+    x: v.x * radX,
+    y: v.y * radY,
+    z: v.z * radZ
   }));
 
   // 3. Determine cut plane Z
-  // In our coordinate system, top of dome is at +radius.
-  // Full sphere Z is in [-radius, +radius].
-  // Standard fractions:
-  // 1/2 hemisphere: cut at z = 0 (height = radius)
-  // 3/8 dome: height = diameter * 3/8 = radius * 0.75 -> cut at z = radius - height = 0.25 * radius
-  // 5/8 dome: height = diameter * 5/8 = radius * 1.25 -> cut at z = -0.25 * radius
-  // 7/12 dome: height = diameter * 7/12
+  // In our coordinate system, top of dome is at +radZ.
+  // Full sphere/ellipsoid Z is in [-radZ, +radZ].
   let cutZ = 0;
-  let effectiveHeight = height;
+  let effectiveHeight = isEllipsoid ? hgtZ : height;
 
-  if (cutType === "1/2") {
-    cutZ = 0;
-    effectiveHeight = radius;
-  } else if (cutType === "3/8") {
-    effectiveHeight = (diameter * 3) / 8;
-    cutZ = radius - effectiveHeight;
+  if (cutType === "1/1") {
+    // Full 360° closed geodesic sphere / ellipsoid
+    effectiveHeight = radZ * 2;
+    cutZ = -radZ * 1.08; // safely keep all vertices of the sphere
+  } else if (cutType === "5/6") {
+    effectiveHeight = isEllipsoid ? (radZ * 5) / 3 : (diameter * 5) / 6;
+    cutZ = radZ - effectiveHeight;
+  } else if (cutType === "3/4") {
+    effectiveHeight = isEllipsoid ? radZ * 1.5 : (diameter * 3) / 4;
+    cutZ = radZ - effectiveHeight;
   } else if (cutType === "5/8") {
-    effectiveHeight = (diameter * 5) / 8;
-    cutZ = radius - effectiveHeight;
+    effectiveHeight = isEllipsoid ? radZ * 1.25 : (diameter * 5) / 8;
+    cutZ = radZ - effectiveHeight;
   } else if (cutType === "7/12") {
-    effectiveHeight = (diameter * 7) / 12;
-    cutZ = radius - effectiveHeight;
+    effectiveHeight = isEllipsoid ? (radZ * 7) / 6 : (diameter * 7) / 12;
+    cutZ = radZ - effectiveHeight;
+  } else if (cutType === "1/2") {
+    effectiveHeight = radZ;
+    cutZ = 0;
+  } else if (cutType === "5/12") {
+    effectiveHeight = isEllipsoid ? (radZ * 5) / 6 : (diameter * 5) / 12;
+    cutZ = radZ - effectiveHeight;
+  } else if (cutType === "3/8") {
+    effectiveHeight = isEllipsoid ? radZ * 0.75 : (diameter * 3) / 8;
+    cutZ = radZ - effectiveHeight;
+  } else if (cutType === "1/4") {
+    effectiveHeight = isEllipsoid ? radZ * 0.5 : (diameter * 1) / 4;
+    cutZ = radZ - effectiveHeight;
+  } else if (cutType === "1/6") {
+    effectiveHeight = isEllipsoid ? (radZ * 1) / 3 : (diameter * 1) / 6;
+    cutZ = radZ - effectiveHeight;
   } else {
     // Exact height
-    effectiveHeight = Math.min(diameter, Math.max(radius * 0.2, height));
-    cutZ = radius - effectiveHeight;
+    effectiveHeight = Math.min(radZ * 2, Math.max(radZ * 0.1, isEllipsoid ? hgtZ : height));
+    cutZ = radZ - effectiveHeight;
   }
 
   // Filter faces whose centroid or all vertices are above the cutting plane
   // Keep complete triangles above cut plane (with slight tolerance to catch the base ring)
-  const tolerance = radius * 0.04;
+  const tolerance = radZ * 0.04;
   const keptFaces = subdivision.faces.filter(face => {
     const a = scaledVertices[face.a];
     const b = scaledVertices[face.b];
@@ -154,21 +176,32 @@ export function generateDome(
     const mode = parameters.levelingMode || "flat_ring";
 
     if (mode === "flat_ring") {
-      let sumR = 0;
-      boundaryVertexIds.forEach(vid => {
-        sumR += Math.hypot(domeVertices[vid].x, domeVertices[vid].y);
-      });
-      const avgBaseRadius =
-        boundaryVertexIds.size > 0 ? sumR / boundaryVertexIds.size : radius;
+      if (boundaryVertexIds.size > 0 && cutType !== "1/1") {
+        // Calculate theoretical horizontal cross-section semi-axes at base plane
+        // Ellipsoid: (x/radX)^2 + (y/radY)^2 + (z/radZ)^2 = 1
+        // At cut plane z = cutZ: (x/radX)^2 + (y/radY)^2 = 1 - (cutZ/radZ)^2
+        const cutRatio = Math.min(0.99, Math.max(0, Math.abs(cutZ) / radZ));
+        const cutScale = Math.sqrt(Math.max(0.01, 1 - cutRatio * cutRatio));
 
-      for (const vid of boundaryVertexIds) {
-        const v = domeVertices[vid];
-        const angle = Math.atan2(v.y, v.x);
-        domeVertices[vid] = {
-          x: Math.round(avgBaseRadius * Math.cos(angle) * 10) / 10,
-          y: Math.round(avgBaseRadius * Math.sin(angle) * 10) / 10,
-          z: 0 // Leveled exactly to horizontal foundation plane
-        };
+        // When cutType === "1/2" (equator / middle of sphere or ellipsoid):
+        // base adapts exactly to the equator: length X (radX), width Y (radY), diameter (radius)
+        const targetSemiX = isEllipsoid
+          ? radX * (cutType === "1/2" ? 1 : cutScale)
+          : radius * (cutType === "1/2" ? 1 : cutScale);
+        const targetSemiY = isEllipsoid
+          ? radY * (cutType === "1/2" ? 1 : cutScale)
+          : radius * (cutType === "1/2" ? 1 : cutScale);
+
+        for (const vid of boundaryVertexIds) {
+          const v = domeVertices[vid];
+          // Elliptic angle in normalized parameter space
+          const angle = Math.atan2(v.y / radY, v.x / radX);
+          domeVertices[vid] = {
+            x: Math.round(targetSemiX * Math.cos(angle) * 10) / 10,
+            y: Math.round(targetSemiY * Math.sin(angle) * 10) / 10,
+            z: 0 // Leveled exactly to horizontal foundation plane
+          };
+        }
       }
     } else if (mode === "risers") {
       const groundNodeMap = new Map<number, number>();
@@ -333,6 +366,20 @@ export function generateDome(
     tierQueue.push(bId);
   }
 
+  // If no boundary ring exists (e.g. 1/1 full sphere), seed Tier 1 from the bottom-most pole node
+  if (boundaryVertexIds.size === 0 && domeVertices.length > 0) {
+    let lowestVid = 0;
+    let minZVal = Infinity;
+    for (let vid = 0; vid < domeVertices.length; vid++) {
+      if (domeVertices[vid].z < minZVal) {
+        minZVal = domeVertices[vid].z;
+        lowestVid = vid;
+      }
+    }
+    vertexTierMap.set(lowestVid, 1);
+    tierQueue.push(lowestVid);
+  }
+
   // BFS upward to classify concentric geodesic rings into tiers 2, 3, 4, 5...
   while (tierQueue.length > 0) {
     const curr = tierQueue.shift()!;
@@ -455,7 +502,18 @@ export function generateDome(
   const outerOffset = (effBeamDepth / 2) + (customSheathing?.offsetMm || 0);
 
   // Build full topology with sheathing panels measured on outer faces of beams
-  const topology = buildTopology(domeVertices, domeFaces, 0, outerOffset, sphereCenterZ, radius);
+  const topology = buildTopology(
+    domeVertices,
+    domeFaces,
+    0,
+    outerOffset,
+    sphereCenterZ,
+    radius,
+    parameters.shapeType || "sphere",
+    radX,
+    radY,
+    radZ
+  );
 
   // Tag tier levels and tier leveling on topology nodes
   for (const node of topology.nodes) {
@@ -551,14 +609,36 @@ export function generateDome(
 
   // Calculate base radius & circumference from boundary nodes
   const boundaryNodes = topology.nodes.filter(n => n.boundary);
+
+  // Exact base semi-axes based on cut plane
+  const cutRatio = Math.min(0.99, Math.max(0, Math.abs(cutZ) / radZ));
+  const cutScale = Math.sqrt(Math.max(0.01, 1 - cutRatio * cutRatio));
+  const targetSemiX = isEllipsoid
+    ? radX * (cutType === "1/2" ? 1 : cutScale)
+    : radius * (cutType === "1/2" ? 1 : cutScale);
+  const targetSemiY = isEllipsoid
+    ? radY * (cutType === "1/2" ? 1 : cutScale)
+    : radius * (cutType === "1/2" ? 1 : cutScale);
+
   const baseRadiusMm =
     boundaryNodes.length > 0
       ? boundaryNodes.reduce((sum, n) => sum + Math.hypot(n.position.x, n.position.y), 0) /
         boundaryNodes.length
-      : radius;
+      : (targetSemiX + targetSemiY) / 2;
 
-  const floorAreaM2 = Math.round((Math.PI * Math.pow(baseRadiusMm / 1000, 2)) * 10) / 10;
-  const baseCircumferenceM = Math.round((2 * Math.PI * (baseRadiusMm / 1000)) * 10) / 10;
+  // Floor area: for ellipse = PI * a * b, for circle = PI * r^2
+  const floorAreaM2 = isEllipsoid
+    ? Math.round((Math.PI * (targetSemiX / 1000) * (targetSemiY / 1000)) * 10) / 10
+    : Math.round((Math.PI * Math.pow(baseRadiusMm / 1000, 2)) * 10) / 10;
+
+  // Base circumference: for ellipse use Ramanujan's perimeter formula
+  const aM = targetSemiX / 1000;
+  const bM = targetSemiY / 1000;
+  const baseCircumferenceM = isEllipsoid
+    ? Math.round(
+        (Math.PI * (3 * (aM + bM) - Math.sqrt((3 * aM + bM) * (aM + 3 * bM)))) * 10
+      ) / 10
+    : Math.round((2 * Math.PI * (baseRadiusMm / 1000)) * 10) / 10;
 
   // Surface area sum of all faces
   const domeSurfaceAreaM2 =
@@ -566,12 +646,36 @@ export function generateDome(
       (topology.faces.reduce((sum, f) => sum + f.area, 0) / 1_000_000) * 10
     ) / 10;
 
-  // Spherical cap volume + plinth cylinder/polygon volume
+  // Volume:
+  // For ellipsoid:
+  // Half-ellipsoid (1/2): V = (2/3) * PI * radX * radY * radZ
+  // Full ellipsoid (1/1): V = (4/3) * PI * radX * radY * radZ
+  // Cap: V = PI * rx * ry * (h/rz)^2 * (rz - h/3)
   const domeCapHeightM = (effectiveHeight - (isPlinthActive ? plinthH : 0)) / 1000;
   const rM = radius / 1000;
-  const capVolumeM3 = (Math.PI * Math.pow(domeCapHeightM, 2) / 3) * (3 * rM - domeCapHeightM);
+  const rxM = radX / 1000;
+  const ryM = radY / 1000;
+  const rzM = radZ / 1000;
+
+  let capVolumeM3 = 0;
+  if (isEllipsoid) {
+    if (cutType === "1/2") {
+      capVolumeM3 = (2 / 3) * Math.PI * rxM * ryM * rzM;
+    } else if (cutType === "1/1") {
+      capVolumeM3 = (4 / 3) * Math.PI * rxM * ryM * rzM;
+    } else {
+      const hNorm = Math.min(2 * rzM, Math.max(0.05, domeCapHeightM));
+      capVolumeM3 = Math.PI * rxM * ryM * Math.pow(hNorm / rzM, 2) * (rzM - hNorm / 3);
+    }
+  } else {
+    if (cutType === "1/1") {
+      capVolumeM3 = (4 / 3) * Math.PI * Math.pow(rM, 3);
+    } else {
+      capVolumeM3 = (Math.PI * Math.pow(domeCapHeightM, 2) / 3) * (3 * rM - domeCapHeightM);
+    }
+  }
   const plinthVolM3 = isPlinthActive ? floorAreaM2 * (plinthH / 1000) : 0;
-  const domeVolumeM3 = Math.round((capVolumeM3 + plinthVolM3) * 10) / 10;
+  const domeVolumeM3 = Math.round((Math.max(0, capVolumeM3) + plinthVolM3) * 10) / 10;
 
   const statistics = {
     nodes: topology.nodes.length,

@@ -378,7 +378,7 @@ export function generateSpecificationHTML(model: DomeModel): string {
         <div class="metric-card">
           <div class="label">Висота у коньку</div>
           <div class="value">${(parameters.height / 1000).toFixed(2)} м</div>
-          <div class="sub">Тип зрізу: ${parameters.cutType} сфери</div>
+          <div class="sub">Тип зрізу: ${parameters.cutType === "1/1" ? "1/1 (Повна сфера)" : parameters.cutType + " сфери"}</div>
         </div>
         <div class="metric-card">
           <div class="label">Площа підлоги (Z=0)</div>

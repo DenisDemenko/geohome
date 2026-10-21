@@ -1900,16 +1900,17 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           return Math.atan2(a.position.y, a.position.x) - Math.atan2(b.position.y, b.position.x);
         });
 
-        const outerR = (model.parameters.diameter / 2) + Math.max(15, model.parameters.diameter * 0.025);
-        const innerR = Math.max(10, (model.parameters.diameter / 2) - Math.max(15, model.parameters.diameter * 0.025));
-        const stripDepth = Math.max(10, model.parameters.diameter * 0.035);
+        const stripOffset = Math.max(15, (model.parameters.diameter || 8000) * 0.025);
+        const stripDepth = Math.max(10, (model.parameters.diameter || 8000) * 0.035);
 
-        // Concrete ring shape
+        // Concrete ring shape adapting to actual base silhouette (sphere or ellipse)
         const shape = new THREE.Shape();
         sorted.forEach((n, idx) => {
-          const a = Math.atan2(n.position.y, n.position.x);
-          const x = Math.cos(a) * outerR;
-          const y = Math.sin(a) * outerR;
+          const r = Math.hypot(n.position.x, n.position.y) || 1;
+          const ux = n.position.x / r;
+          const uy = n.position.y / r;
+          const x = n.position.x + ux * stripOffset;
+          const y = n.position.y + uy * stripOffset;
           if (idx === 0) shape.moveTo(x, y);
           else shape.lineTo(x, y);
         });
@@ -1917,9 +1918,11 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
         const hole = new THREE.Path();
         sorted.forEach((n, idx) => {
-          const a = Math.atan2(n.position.y, n.position.x);
-          const x = Math.cos(a) * innerR;
-          const y = Math.sin(a) * innerR;
+          const r = Math.hypot(n.position.x, n.position.y) || 1;
+          const ux = n.position.x / r;
+          const uy = n.position.y / r;
+          const x = n.position.x - ux * stripOffset;
+          const y = n.position.y - uy * stripOffset;
           if (idx === 0) hole.moveTo(x, y);
           else hole.lineTo(x, y);
         });
@@ -5412,8 +5415,12 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             {selectedNodeId !== null && `Обрано Вузол #${selectedNodeId}`}
             {selectedEdgeId !== null && (() => {
               const e = model.edges[selectedEdgeId];
+              if (!e) return `Балка #${selectedEdgeId}`;
               const cutL = e.cutLength || Math.round(e.length - model.connectorParams.hubDiameter);
-              return `Балка #${selectedEdgeId} (${e?.type}) · L: ${e?.length} мм · Обріз: ${cutL} мм`;
+              const label = e.beamLabel || `E-${selectedEdgeId + 1}`;
+              const quadStr = e.quadrant ? ` · ${e.quadrant}` : "";
+              const miterStr = e.startMiterDeg !== undefined ? ` · Скос ${e.startMiterDeg}°` : "";
+              return `Балка ${label} (${e.type}${quadStr}) · L: ${e.length} мм · Обріз: ${cutL} мм${miterStr}`;
             })()}
           </span>
           <button

@@ -111,12 +111,18 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
 }) => {
   const currentParams = params || model.parameters;
 
-  const frequencies: Frequency[] = [1, 2, 3, 4, 5, 6];
+  const frequencies: Frequency[] = [1, 2, 3, 4, 5, 6, 7, 8];
   const cutOptions: { id: DomeCutType; label: string; short: string; desc: string }[] = [
-    { id: "1/2", label: "1/2", short: "Півсфера", desc: "Півсфера (H = 50% Ø)" },
-    { id: "3/8", label: "3/8", short: "Низький", desc: "Низький купол (H = 38% Ø)" },
-    { id: "5/8", label: "5/8", short: "Високий", desc: "Високий купол (H = 62% Ø)" },
-    { id: "7/12", label: "7/12", short: "Стіна", desc: "Оптимальна вертикальна стіна (H = 58% Ø)" }
+    { id: "1/1", label: "1/1", short: "Сфера", desc: "Повна замкнута сфера (H = 100% Ø)" },
+    { id: "5/6", label: "5/6", short: "5/6", desc: "Високий купол (H = 83.3% Ø)" },
+    { id: "3/4", label: "3/4", short: "3/4", desc: "Павільйон (H = 75% Ø)" },
+    { id: "5/8", label: "5/8", short: "5/8", desc: "Високий купол (H = 62.5% Ø)" },
+    { id: "7/12", label: "7/12", short: "7/12", desc: "Оптимальна стіна (H = 58.3% Ø)" },
+    { id: "1/2", label: "1/2", short: "1/2", desc: "Півсфера (H = 50% Ø)" },
+    { id: "5/12", label: "5/12", short: "5/12", desc: "Пологий купол (H = 41.7% Ø)" },
+    { id: "3/8", label: "3/8", short: "3/8", desc: "Низький купол (H = 37.5% Ø)" },
+    { id: "1/4", label: "1/4", short: "1/4", desc: "Плоский навіс (H = 25% Ø)" },
+    { id: "1/6", label: "1/6", short: "1/6", desc: "Мілкий дах (H = 16.7% Ø)" }
   ];
 
   const handleUpdateParams = (partial: Partial<DomeParameters>) => {
@@ -125,11 +131,16 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
       ...partial
     };
     if (partial.cutType && !partial.height) {
-      const radius = updated.diameter / 2;
-      if (partial.cutType === "1/2") updated.height = radius;
-      else if (partial.cutType === "3/8") updated.height = Math.round(updated.diameter * 0.38);
-      else if (partial.cutType === "5/8") updated.height = Math.round(updated.diameter * 0.62);
-      else if (partial.cutType === "7/12") updated.height = Math.round(updated.diameter * 0.583);
+      if (partial.cutType === "1/1") updated.height = updated.diameter;
+      else if (partial.cutType === "5/6") updated.height = Math.round((updated.diameter * 5) / 6);
+      else if (partial.cutType === "3/4") updated.height = Math.round((updated.diameter * 3) / 4);
+      else if (partial.cutType === "5/8") updated.height = Math.round(updated.diameter * 0.625);
+      else if (partial.cutType === "7/12") updated.height = Math.round((updated.diameter * 7) / 12);
+      else if (partial.cutType === "1/2") updated.height = Math.round(updated.diameter / 2);
+      else if (partial.cutType === "5/12") updated.height = Math.round((updated.diameter * 5) / 12);
+      else if (partial.cutType === "3/8") updated.height = Math.round(updated.diameter * 0.375);
+      else if (partial.cutType === "1/4") updated.height = Math.round(updated.diameter * 0.25);
+      else if (partial.cutType === "1/6") updated.height = Math.round(updated.diameter * (1 / 6));
     }
     if (partial.diameter && !partial.height) {
       const ratio = currentParams.height / currentParams.diameter;
@@ -2749,7 +2760,7 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-4 gap-1.5 p-1 rounded-xl tactile-inset bg-[#F5F0E8]/70">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1 rounded-xl tactile-inset bg-[#F5F0E8]/70">
                   {cutOptions.map(c => {
                     const isSelected = currentParams.cutType === c.id;
                     return (
@@ -2776,11 +2787,11 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                     );
                   })}
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-[#8C9BAE] px-1 font-medium">
+                <div className="flex flex-wrap items-center justify-between text-[10px] text-[#8C9BAE] px-1 font-medium gap-1">
+                  <span>1/1 — повна сфера</span>
                   <span>1/2 — півсфера</span>
-                  <span>3/8 — низький</span>
-                  <span>5/8 — високий</span>
-                  <span>7/12 — стіна</span>
+                  <span>5/8, 7/12 — високий купол</span>
+                  <span>1/4, 1/6 — пологий навіс</span>
                 </div>
               </div>
             </div>

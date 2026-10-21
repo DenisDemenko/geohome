@@ -54,6 +54,16 @@ export interface Edge {
   isPlinthBeam?: boolean;
   /** Role in plinth: vertical post, ground sill, or diagonal brace */
   plinthRole?: "post" | "sill" | "diagonal";
+  /** Unique individual beam marking index, e.g. "E-001", "E-002" */
+  beamLabel?: string;
+  /** Symmetry quadrant in ellipsoid: "Q1" (+X,+Y), "Q2" (-X,+Y), "Q3" (-X,-Y), "Q4" (+X,-Y) */
+  quadrant?: "Q1" | "Q2" | "Q3" | "Q4";
+  /** Start node miter cut angle in degrees */
+  startMiterDeg?: number;
+  /** End node miter cut angle in degrees */
+  endMiterDeg?: number;
+  /** Side bevel angle in degrees */
+  bevelDeg?: number;
 }
 
 export interface Face {
@@ -70,7 +80,18 @@ export interface Face {
   plinthBayIndex?: number;
 }
 
-export type DomeCutType = "1/2" | "3/8" | "5/8" | "7/12" | "exact";
+export type DomeCutType =
+  | "1/1"
+  | "5/6"
+  | "3/4"
+  | "5/8"
+  | "7/12"
+  | "1/2"
+  | "5/12"
+  | "3/8"
+  | "1/4"
+  | "1/6"
+  | "exact";
 
 export type BaseLevelingMode = "flat_ring" | "risers";
 
@@ -137,6 +158,14 @@ export interface DomeParameters {
   doorFaceIds?: number[];
   /** Optional door opening parameters */
   doorParams?: DoorOpeningParams;
+  /** Shape type: "sphere" (standard geodesic) or "ellipsoid" (parametric oval dome) */
+  shapeType?: "sphere" | "ellipsoid";
+  /** Ellipsoid length along X axis in millimetres (default equals diameter) */
+  ellipsoidLengthX?: number;
+  /** Ellipsoid width along Y axis in millimetres (default equals diameter) */
+  ellipsoidWidthY?: number;
+  /** Ellipsoid height along Z axis in millimetres (default equals height) */
+  ellipsoidHeightZ?: number;
 }
 
 export type InsulationMaterialId =

@@ -304,8 +304,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <Ruler className="w-3.5 h-3.5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-[#1A2E3B]">
-                Інспектор балки #{edge.id} (Тип {edge.type})
+              <h3 className="text-sm font-bold text-[#1A2E3B] flex items-center gap-2">
+                <span>Балка {edge.beamLabel || `#${edge.id}`} (Тип {edge.type})</span>
+                {edge.quadrant && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-[#E8EFF5] text-[#2B6CB0]">
+                    {edge.quadrant}
+                  </span>
+                )}
               </h3>
               <p className="text-[11px] text-[#5A6778]">
                 Вузол #{edge.start} ↔ Вузол #{edge.end}
@@ -348,7 +353,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <div className="p-2.5 rounded-xl tactile-inset-subtle">
             <span className="text-[10px] text-[#8C9BAE] block">Торцевий зпил</span>
             <span className="font-mono font-bold text-sm text-[#DE7C5A]">
-              {miter.startMiterDeg}°
+              {edge.startMiterDeg ?? miter.startMiterDeg}°
+              {edge.endMiterDeg && edge.endMiterDeg !== edge.startMiterDeg ? ` / ${edge.endMiterDeg}°` : ""}
             </span>
             <span className="text-[9px] text-[#8C9BAE] block">кут на торцювальній пилі</span>
           </div>
