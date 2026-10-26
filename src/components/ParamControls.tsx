@@ -405,7 +405,7 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
             <div className="leading-tight">
               <span className="block text-[11px]">Внутрішня обшивка</span>
               <span className="text-[9px] font-normal text-[#5A6778]">
-                {displayLayers?.showInnerSheathing ? "Показується" : "Приховано"}
+                {displayLayers?.showInnerSheathing ? "Показується (за типами)" : "Приховано"}
               </span>
             </div>
           </button>
@@ -1261,7 +1261,14 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
                     const prevTierLeveling = params.tierLeveling || {};
                     let refId = currentCfg?.referenceNodeId;
                     let targetZ = currentCfg?.targetZ;
-                    if (checked && refId === undefined && nodesInTier.length > 0) {
+
+                    // If targetZ was from a different shape/frequency and out of range, reset it
+                    if (targetZ !== undefined && currentTier && (targetZ < currentTier.minZ - 100 || targetZ > currentTier.maxZ + 200)) {
+                      targetZ = undefined;
+                      refId = undefined;
+                    }
+
+                    if (checked && (refId === undefined || targetZ === undefined) && nodesInTier.length > 0) {
                       const highestNode = [...nodesInTier].sort((a, b) => b.position.z - a.position.z)[0];
                       refId = highestNode.id;
                       targetZ = Math.round(highestNode.position.z * 10) / 10;
@@ -1276,7 +1283,7 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
                           enabled: checked,
                           referenceNodeId: refId,
                           targetZ: targetZ ?? currentTier?.maxZ,
-                          radialMode: currentCfg?.radialMode || "vertical"
+                          radialMode: currentCfg?.radialMode || (params.shapeType === "ellipsoid" ? "spherical" : "vertical")
                         }
                       }
                     });
@@ -1360,13 +1367,17 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
                       className="w-full text-xs p-2 rounded-xl bg-white border border-[#86EFAC] text-[#1A3E26] font-medium shadow-2xs focus:ring-1 focus:ring-[#10B981] outline-hidden"
                     >
                       {nodesInTier.map(node => {
+                        const isEllip = params.shapeType === "ellipsoid";
                         const rXY = Math.round(Math.hypot(node.position.x, node.position.y));
                         const isHighest = Math.abs(node.position.z - (currentTier?.maxZ ?? 0)) < 1;
                         const isLowest = Math.abs(node.position.z - (currentTier?.minZ ?? 0)) < 1;
                         const badge = isHighest ? " (Найвищий)" : isLowest ? " (Найнижчий)" : "";
+                        const coordInfo = isEllip
+                          ? `X: ${Math.round(Math.abs(node.position.x))} мм, Y: ${Math.round(Math.abs(node.position.y))} мм`
+                          : `R: ${rXY} мм`;
                         return (
                           <option key={node.id} value={node.id}>
-                            Вузол #{node.id} ({node.label}) — Z: {Math.round(node.position.z)} мм · R: {rXY} мм{badge}
+                            Вузол #{node.id} ({node.label}) — Z: {Math.round(node.position.z)} мм · {coordInfo}{badge}
                           </option>
                         );
                       })}
@@ -1508,7 +1519,7 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
                             : "text-[#065F46] hover:bg-emerald-50"
                         }`}
                       >
-                        На сфері
+                        {params.shapeType === "ellipsoid" ? "На формі еліпса" : "На сфері"}
                       </button>
                       <button
                         type="button"
@@ -1530,7 +1541,7 @@ export const ParamControls: React.FC<ParamControlsProps> = ({
                             : "text-[#065F46] hover:bg-emerald-50"
                         }`}
                       >
-                        Рівне коло (R const)
+                        {params.shapeType === "ellipsoid" ? "Рівний еліпс" : "Рівне коло (R const)"}
                       </button>
                     </div>
                   </div>

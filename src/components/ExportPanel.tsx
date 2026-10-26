@@ -1,7 +1,12 @@
 import React, { useState, useMemo } from "react";
-import { DomeModel, NodeId } from "../core/types";
+import { DomeModel, NodeId, InnerSheathingParams } from "../core/types";
 import { calculateConnector } from "../core/connectors";
-import { calculateSheetNesting, getRecommendedSheetFormat } from "../core/sheathing";
+import {
+  calculateSheetNesting,
+  calculateInnerSheathingNesting,
+  getRecommendedSheetFormat
+} from "../core/sheathing";
+import { INNER_SHEATHING_MATERIALS } from "../core/conversions";
 import {
   generateConnectorSVG,
   generateSheathingNestingSVG,
@@ -61,16 +66,25 @@ import {
   Circle,
   Film,
   Camera,
-  Play
+  Play,
+  Home
 } from "lucide-react";
 
 interface ExportPanelProps {
   model: DomeModel;
   selectedNodeId: NodeId | null;
   onNavigateTo3D?: () => void;
+  innerSheathingParams?: InnerSheathingParams;
+  onChangeInnerSheathingParams?: (params: Partial<InnerSheathingParams>) => void;
 }
 
-export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId, onNavigateTo3D }) => {
+export const ExportPanel: React.FC<ExportPanelProps> = ({
+  model,
+  selectedNodeId,
+  onNavigateTo3D,
+  innerSheathingParams,
+  onChangeInnerSheathingParams
+}) => {
   const [isARModalOpen, setIsARModalOpen] = useState(false);
   const activeNodeId = selectedNodeId !== null ? selectedNodeId : model.nodes[0]?.id || 0;
   const activeNode = model.nodes.find(n => n.id === activeNodeId) || model.nodes[0];
@@ -261,6 +275,61 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId,
   const handleExportSheathingTrianglesDXF = () => {
     const dxf = generateSheathingTrianglesDXF(model, { version: dxfVersion });
     downloadDXF(`sheathing_triangles_blueprints_${model.parameters.frequency}V_${dxfVersion}.dxf`, dxf);
+  };
+
+  // 2e-ii. Inner Sheathing CNC Nesting State & Handlers
+  const [innerSheathingMat, setInnerSheathingMat] = useState<string>(
+    innerSheathingParams?.material || "drywall"
+  );
+
+  const selectedInnerMatConfig = useMemo(() => {
+    return INNER_SHEATHING_MATERIALS.find(m => m.id === innerSheathingMat) || INNER_SHEATHING_MATERIALS[0];
+  }, [innerSheathingMat]);
+
+  const innerNestingLayout = useMemo(() => {
+    return calculateInnerSheathingNesting(
+      model,
+      selectedInnerMatConfig.standardSheet.w,
+      selectedInnerMatConfig.standardSheet.h,
+      6,
+      15,
+      12,
+      3000,
+      1,
+      selectedInnerMatConfig.name
+    );
+  }, [model, selectedInnerMatConfig]);
+
+  // Export Inner Sheathing CNC SVG
+  const handleExportInnerSheathingSVG = () => {
+    const svg = generateSheathingNestingSVG(innerNestingLayout, 0);
+    downloadFile(
+      `inner_sheathing_${selectedInnerMatConfig.id}_sheet_1_of_${innerNestingLayout.totalSheetsRequired}_${selectedInnerMatConfig.standardSheet.w}x${selectedInnerMatConfig.standardSheet.h}_D6mm.svg`,
+      svg
+    );
+  };
+
+  // Export Inner Sheathing CNC PDF Album
+  const handleExportInnerSheathingPDF = () => {
+    exportSheathingNestingPDF(model, innerNestingLayout);
+  };
+
+  // Export Inner Sheathing CNC DXF (Sheet 1)
+  const handleExportInnerSheathingDXF = () => {
+    const dxf = generateSheathingSheetDXF(innerNestingLayout, 0, { version: dxfVersion });
+    downloadDXF(
+      `inner_sheathing_${selectedInnerMatConfig.id}_sheet_1_of_${innerNestingLayout.totalSheetsRequired}_${selectedInnerMatConfig.standardSheet.w}x${selectedInnerMatConfig.standardSheet.h}_${dxfVersion}.dxf`,
+      dxf
+    );
+  };
+
+  // Export All Inner Sheathing Sheets in Master DXF
+  const handleExportAllInnerSheathingDXF = () => {
+    const dxf = generateAllSheathingSheetsDXF(innerNestingLayout, { version: dxfVersion });
+    downloadDXF(
+      `inner_sheathing_${selectedInnerMatConfig.id}_all_sheets_${innerNestingLayout.totalSheetsRequired}_${selectedInnerMatConfig.standardSheet.w}x${selectedInnerMatConfig.standardSheet.h}_${dxfVersion}.dxf`,
+      dxf
+    );
   };
 
   // 2f. Export All Connectors in Master DXF for Laser Cutting
@@ -555,6 +624,64 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId,
               </button>
             </div>
           </div>
+
+          {/* Inner Sheathing Nesting DXF (CNC Router) */}
+          <div className="p-4 rounded-2xl tactile-card border border-[#7C3AED]/40 bg-gradient-to-br from-white to-[#EDE9FE]/20 flex flex-col justify-between gap-3 shadow-xs">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#7C3AED] text-white shrink-0 shadow-xs">
+                <Home className="w-5 h-5 text-amber-200" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-1 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-bold text-[#1A2E3B]">Розкрій внутрішньої обшивки (DXF)</h4>
+                    <span className="text-[9px] font-mono font-bold bg-[#EDE9FE] text-[#6D28D9] px-1.5 py-0.5 rounded border border-[#DDD6FE]">
+                      ЧПК Фрезер
+                    </span>
+                  </div>
+
+                  {/* Material selector */}
+                  <select
+                    value={innerSheathingMat}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setInnerSheathingMat(val);
+                      if (onChangeInnerSheathingParams) {
+                        onChangeInnerSheathingParams({ material: val as any });
+                      }
+                    }}
+                    className="text-[11px] font-bold bg-white border border-[#CBD5E1] rounded-lg px-2 py-0.5 outline-none cursor-pointer text-[#1E293B]"
+                  >
+                    {INNER_SHEATHING_MATERIALS.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.standardSheet.w}×{m.standardSheet.h})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-[11px] text-[#5A6778] mt-1">
+                  AutoCAD DXF розкладка внутрішніх трикутників на листах ({selectedInnerMatConfig.standardSheet.w} × {selectedInnerMatConfig.standardSheet.h} мм). Всього {innerNestingLayout.totalPanels} деталей на {innerNestingLayout.totalSheetsRequired} листах (фреза Ø6мм).
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 pt-2 border-t border-[#7C3AED]/20">
+              <button
+                onClick={handleExportAllInnerSheathingDXF}
+                className="flex-1 px-3 py-1.5 text-xs font-bold rounded-xl bg-[#7C3AED] text-white hover:bg-[#6D28D9] flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                title={`Завантажити всі ${innerNestingLayout.totalSheetsRequired} листів внутрішньої обшивки в один файл DXF`}
+              >
+                <Download className="w-3.5 h-3.5 text-amber-200" />
+                <span>Всі листи нестингу ({innerNestingLayout.totalSheetsRequired} л. DXF)</span>
+              </button>
+              <button
+                onClick={handleExportInnerSheathingDXF}
+                className="px-3 py-1.5 text-xs font-bold rounded-xl bg-white border border-[#CBD5E1] text-[#1E293B] hover:bg-[#F3EFE6] whitespace-nowrap cursor-pointer shadow-2xs"
+                title="Завантажити креслення першого листа внутрішньої обшивки у DXF"
+              >
+                Лист 1 (DXF)
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -606,6 +733,27 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId,
             </button>
           </div>
 
+          {/* Inner Sheathing Nesting SVG */}
+          <div className="p-4 rounded-2xl tactile-inset-subtle border border-[#7C3AED]/30 bg-gradient-to-r from-white to-[#EDE9FE]/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#EDE9FE] text-[#7C3AED]">
+                <Home className="w-5 h-5 text-[#7C3AED]" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-[#1A2E3B]">Карта розкрою внутрішньої обшивки (SVG)</h4>
+                <p className="text-[11px] text-[#5A6778]">
+                  ЧПК розкладка на листи {selectedInnerMatConfig.name} {selectedInnerMatConfig.standardSheet.w}×{selectedInnerMatConfig.standardSheet.h} мм (Лист 1 з {innerNestingLayout.totalSheetsRequired})
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleExportInnerSheathingSVG}
+              className="px-3.5 py-1.5 text-xs font-bold rounded-xl bg-white border border-[#CBD5E1] text-[#7C3AED] hover:bg-[#EDE9FE] whitespace-nowrap shadow-2xs cursor-pointer"
+            >
+              Завантажити SVG
+            </button>
+          </div>
+
           {/* Sheathing Nesting PDF Album */}
           <div className="p-4 rounded-2xl tactile-inset-subtle border border-white/60 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -622,6 +770,27 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ model, selectedNodeId,
             <button
               onClick={handleExportSheathingPDF}
               className="px-3.5 py-1.5 text-xs font-bold rounded-xl tactile-btn-mint whitespace-nowrap shadow-2xs"
+            >
+              Сформувати PDF
+            </button>
+          </div>
+
+          {/* Inner Sheathing Nesting PDF Album */}
+          <div className="p-4 rounded-2xl tactile-inset-subtle border border-[#7C3AED]/30 bg-gradient-to-r from-white to-[#EDE9FE]/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#EDE9FE] text-[#7C3AED]">
+                <BookOpen className="w-5 h-5 text-[#7C3AED]" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-[#1A2E3B]">Розкрій внутрішньої обшивки (PDF Альбом)</h4>
+                <p className="text-[11px] text-[#5A6778]">
+                  Повний технологічний паспорт ({innerNestingLayout.totalPanels} деталей) та всі {innerNestingLayout.totalSheetsRequired} листів А4
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleExportInnerSheathingPDF}
+              className="px-3.5 py-1.5 text-xs font-bold rounded-xl bg-[#7C3AED] text-white hover:bg-[#6D28D9] whitespace-nowrap shadow-2xs cursor-pointer"
             >
               Сформувати PDF
             </button>

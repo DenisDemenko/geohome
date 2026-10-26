@@ -403,7 +403,9 @@ export function generateDome(
 
   if (hasDoor) {
     const isTier2Or3Leveled = Boolean(effectiveTierLeveling[2]?.enabled || effectiveTierLeveling[3]?.enabled);
-    if (!isTier2Or3Leveled) {
+    const userExplicitlyDisabled =
+      parameters.tierLeveling?.[2]?.enabled === false || parameters.tierLeveling?.[3]?.enabled === false;
+    if (!isTier2Or3Leveled && !userExplicitlyDisabled) {
       const doorVids = new Set<number>();
       for (const fid of activeDoorFaceIds) {
         const f = domeFaces[fid];
@@ -452,38 +454,61 @@ export function generateDome(
       let targetZ: number;
       let targetR: number;
 
+      const minTierZ = Math.min(...tierVids.map(vid => domeVertices[vid].z));
+      const maxTierZ = Math.max(...tierVids.map(vid => domeVertices[vid].z));
+
       if (cfg.referenceNodeId !== undefined && tierVids.includes(cfg.referenceNodeId)) {
         targetZ = domeVertices[cfg.referenceNodeId].z;
         targetR = Math.hypot(domeVertices[cfg.referenceNodeId].x, domeVertices[cfg.referenceNodeId].y);
-      } else if (cfg.targetZ !== undefined) {
+      } else if (cfg.targetZ !== undefined && cfg.targetZ >= minTierZ - 150 && cfg.targetZ <= maxTierZ + 250) {
         targetZ = cfg.targetZ;
         targetR = Math.hypot(domeVertices[tierVids[0]].x, domeVertices[tierVids[0]].y);
       } else {
         // Default to maximum height in this tier to maximize second floor headroom
-        targetZ = Math.max(...tierVids.map(vid => domeVertices[vid].z));
+        targetZ = maxTierZ;
         targetR = Math.hypot(domeVertices[tierVids[0]].x, domeVertices[tierVids[0]].y);
       }
 
       const radialMode = cfg.radialMode || "vertical";
 
+      // Calculate theoretical horizontal cross-section at height targetZ:
+      // In scaledVertices (pre-grounding) space, coordinate is targetZ + minZ
+      const scaledZ = targetZ + (isFinite(minZ) ? minZ : 0);
+      const semiZ = isEllipsoid ? radZ : radius;
+      const zRatio = Math.min(0.999, Math.max(0, Math.abs(scaledZ) / semiZ));
+      const shellScale = Math.sqrt(Math.max(0.001, 1 - zRatio * zRatio));
+
+      // Semi-axes at targetZ (exact ellipse for ellipsoid, exact circle for sphere)
+      const shellSemiX = isEllipsoid ? radX * shellScale : radius * shellScale;
+      const shellSemiY = isEllipsoid ? radY * shellScale : radius * shellScale;
+
       for (const vid of tierVids) {
         const v = domeVertices[vid];
-        if (radialMode === "uniform_radius") {
-          const angle = Math.atan2(v.y, v.x);
+
+        if (radialMode === "spherical") {
+          // Surface mode: project strictly onto the mathematical shell surface (sphere or ellipsoid) at height targetZ
+          const angle = isEllipsoid ? Math.atan2(v.y / radY, v.x / radX) : Math.atan2(v.y, v.x);
           domeVertices[vid] = {
-            x: Math.round(targetR * Math.cos(angle) * 10) / 10,
-            y: Math.round(targetR * Math.sin(angle) * 10) / 10,
+            x: Math.round(shellSemiX * Math.cos(angle) * 10) / 10,
+            y: Math.round(shellSemiY * Math.sin(angle) * 10) / 10,
             z: Math.round(targetZ * 10) / 10
           };
-        } else if (radialMode === "spherical") {
-          const rZ = targetZ - sphereCenterZ;
-          const sphereRXY = Math.sqrt(Math.max(0, radius * radius - rZ * rZ));
-          const angle = Math.atan2(v.y, v.x);
-          domeVertices[vid] = {
-            x: Math.round(sphereRXY * Math.cos(angle) * 10) / 10,
-            y: Math.round(sphereRXY * Math.sin(angle) * 10) / 10,
-            z: Math.round(targetZ * 10) / 10
-          };
+        } else if (radialMode === "uniform_radius") {
+          // Uniform contour mode (circle for sphere, ellipse for ellipsoid)
+          const angle = isEllipsoid ? Math.atan2(v.y / radY, v.x / radX) : Math.atan2(v.y, v.x);
+          if (isEllipsoid) {
+            domeVertices[vid] = {
+              x: Math.round(shellSemiX * Math.cos(angle) * 10) / 10,
+              y: Math.round(shellSemiY * Math.sin(angle) * 10) / 10,
+              z: Math.round(targetZ * 10) / 10
+            };
+          } else {
+            domeVertices[vid] = {
+              x: Math.round(targetR * Math.cos(angle) * 10) / 10,
+              y: Math.round(targetR * Math.sin(angle) * 10) / 10,
+              z: Math.round(targetZ * 10) / 10
+            };
+          }
         } else {
           // Pure vertical leveling: sets Z parallel to ground, keeps original X and Y
           domeVertices[vid] = {

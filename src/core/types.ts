@@ -414,6 +414,8 @@ export interface InnerSheathingParams {
   offsetMm?: number;
   /** Visual finish */
   finish?: "natural" | "white" | "wood_grain";
+  /** Whether inner sheathing panels are colored by triangle types (default: true) */
+  colorByTriangleType?: boolean;
 }
 
 export interface ConnectorParams {

@@ -92,6 +92,7 @@ interface SheathingNestingPanelProps {
   onCopyWindowsToFabricStrip?: () => void;
   onClearFabricStrip?: () => void;
   onNavigateTo3D?: () => void;
+  initialMaterialTab?: "sheathing" | "fabric_roll" | "inner_sheathing" | "windows" | "solar";
 }
 
 export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
@@ -107,7 +108,8 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
   onSetFabricStripFaceIds,
   onCopyWindowsToFabricStrip,
   onClearFabricStrip,
-  onNavigateTo3D
+  onNavigateTo3D,
+  initialMaterialTab
 }) => {
   const currentParams = params || model.parameters;
 
@@ -200,8 +202,16 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
 
   // Material tab for nesting: "sheathing" | "fabric_roll" | "inner_sheathing" | "windows" | "solar"
   const [nestingMaterialTab, setNestingMaterialTab] = useState<"sheathing" | "fabric_roll" | "inner_sheathing" | "windows" | "solar">(() => {
+    if (initialMaterialTab) return initialMaterialTab;
     return sheathingParams?.material === "fabric_roll" ? "fabric_roll" : "sheathing";
   });
+
+  // Sync when initialMaterialTab changes from parent
+  useEffect(() => {
+    if (initialMaterialTab && initialMaterialTab !== nestingMaterialTab) {
+      setNestingMaterialTab(initialMaterialTab);
+    }
+  }, [initialMaterialTab]);
 
   // Fabric Roll Parameters: roll width (500 to 2000 mm), seam allowance for thread sewing (10 to 60 mm), hem allowance
   const [fabricRollWidthMm, setFabricRollWidthMm] = useState<number>(() => {
@@ -455,8 +465,20 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
 
   // Download Sheet SVG for CNC
   const handleDownloadSheetSvg = () => {
-    const prefix = isViewingWindows ? "window_sheet" : "sheathing_sheet";
-    const matName = isViewingWindows ? "plastic_glass" : "plywood";
+    const prefix = isViewingInner
+      ? `inner_sheathing_${innerMatConfig.id}_sheet`
+      : isViewingWindows
+      ? "window_sheet"
+      : isViewingSolar
+      ? "solar_sheet"
+      : "sheathing_sheet";
+    const matName = isViewingInner
+      ? innerMatConfig.id
+      : isViewingWindows
+      ? "plastic_glass"
+      : isViewingSolar
+      ? "solar_bipv"
+      : "plywood";
     downloadFile(
       `${prefix}_${safeSheetIndex + 1}_of_${activeLayout.totalSheetsRequired}_${activeLayout.sheetWidth}x${activeLayout.sheetHeight}_${matName}.svg`,
       currentNestingSvg,
@@ -472,7 +494,13 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
         showKerf,
         showTabs
       });
-      const prefix = isViewingWindows ? "window_sheet" : "sheathing_sheet";
+      const prefix = isViewingInner
+        ? `inner_sheathing_${innerMatConfig.id}_sheet`
+        : isViewingWindows
+        ? "window_sheet"
+        : isViewingSolar
+        ? "solar_sheet"
+        : "sheathing_sheet";
       setTimeout(() => {
         downloadFile(
           `${prefix}_${i + 1}_of_${activeLayout.totalSheetsRequired}_${activeLayout.sheetWidth}x${activeLayout.sheetHeight}.svg`,
@@ -505,7 +533,13 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
   // Download DXF of active sheet for CNC Routers (ArtCAM, Vectric, SheetCAM, Mach3)
   const handleDownloadDXF = () => {
     const dxfContent = generateSheathingSheetDXF(activeLayout, safeSheetIndex);
-    const prefix = isViewingWindows ? "window_sheet" : "sheathing_sheet";
+    const prefix = isViewingInner
+      ? `inner_sheathing_${innerMatConfig.id}_sheet`
+      : isViewingWindows
+      ? "window_sheet"
+      : isViewingSolar
+      ? "solar_sheet"
+      : "sheathing_sheet";
     downloadDXF(
       `${prefix}_${safeSheetIndex + 1}_of_${activeLayout.totalSheetsRequired}_${activeLayout.sheetWidth}x${activeLayout.sheetHeight}.dxf`,
       dxfContent
@@ -514,9 +548,16 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
 
   // Download master DXF containing ALL nesting sheets
   const handleDownloadAllSheetsDXF = () => {
-    const dxfContent = generateAllSheathingSheetsDXF(nesting);
+    const dxfContent = generateAllSheathingSheetsDXF(activeLayout);
+    const prefix = isViewingInner
+      ? `inner_sheathing_${innerMatConfig.id}`
+      : isViewingWindows
+      ? "windows"
+      : isViewingSolar
+      ? "solar"
+      : "sheathing";
     downloadDXF(
-      `sheathing_all_sheets_${nesting.totalSheetsRequired}_${sheetSize.w}x${sheetSize.h}_D${toolDiameter}mm.dxf`,
+      `${prefix}_all_sheets_${activeLayout.totalSheetsRequired}_${activeLayout.sheetWidth}x${activeLayout.sheetHeight}_D${toolDiameter}mm.dxf`,
       dxfContent
     );
   };
@@ -1232,9 +1273,9 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                   <button
                     onClick={handleDownloadAllSheetsSvg}
                     className="px-2 py-1.5 rounded-lg text-[10px] font-bold text-[#718096] hover:bg-[#FAF7F2] transition-all whitespace-nowrap border-l border-[#E8E2D8]"
-                    title={`Завантажити всі ${nesting.totalSheetsRequired} листів у SVG`}
+                    title={`Завантажити всі ${activeLayout.totalSheetsRequired} листів у SVG`}
                   >
-                    Всі {nesting.totalSheetsRequired} л.
+                    Всі {activeLayout.totalSheetsRequired} л.
                   </button>
                 </div>
 
@@ -1270,9 +1311,9 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                   <button
                     onClick={handleDownloadAllSheetsDXF}
                     className="px-2 py-1.5 rounded-lg text-[10px] font-bold text-[#A0AEC0] hover:text-white hover:bg-[#2D3748] transition-all whitespace-nowrap border-l border-[#2D3748] cursor-pointer"
-                    title={`Завантажити всі ${nesting.totalSheetsRequired} листів нестингу в єдиному файлі DXF`}
+                    title={`Завантажити всі ${activeLayout.totalSheetsRequired} листів нестингу в єдиному файлі DXF`}
                   >
-                    Всі {nesting.totalSheetsRequired} л.
+                    Всі {activeLayout.totalSheetsRequired} л.
                   </button>
                 </div>
 

@@ -171,6 +171,9 @@ export default function App() {
   // Inner Sheathing state (gypsum drywall, chipboard, OSB, plywood FK)
   const [innerSheathingParams, setInnerSheathingParams] = useState<InnerSheathingParams>(DEFAULT_INNER_SHEATHING_PARAMS);
 
+  // Active Nesting Material Layer Tab ("sheathing" | "fabric_roll" | "inner_sheathing" | "windows" | "solar")
+  const [nestingMaterialTab, setNestingMaterialTab] = useState<"sheathing" | "fabric_roll" | "inner_sheathing" | "windows" | "solar">("sheathing");
+
   // Independent 3D Display Layers: Frame (struts), Connectors, Outer Sheathing, Inner Sheathing
   const [displayLayers, setDisplayLayers] = useState<{
     showBeams: boolean;
@@ -587,7 +590,14 @@ export default function App() {
                 onSetFabricStripFaceIds={setFabricStripFaceIds}
                 onCopyWindowsToFabricStrip={handleCopyWindowsToFabricStrip}
                 onClearFabricStrip={handleClearFabricStrip}
-                onNavigateToSheathing={() => setActiveTab("sheathing")}
+                onNavigateToSheathing={(tab) => {
+                  if (tab) setNestingMaterialTab(tab);
+                  setActiveTab("sheathing");
+                }}
+                onNavigateToNesting={(tab) => {
+                  if (tab) setNestingMaterialTab(tab);
+                  setActiveTab("sheathing");
+                }}
               />
 
               {/* Real-time Inspector */}
@@ -699,6 +709,7 @@ export default function App() {
             onCopyWindowsToFabricStrip={handleCopyWindowsToFabricStrip}
             onClearFabricStrip={handleClearFabricStrip}
             onNavigateTo3D={() => setActiveTab("3d")}
+            initialMaterialTab={nestingMaterialTab}
           />
         )}
 
@@ -720,6 +731,8 @@ export default function App() {
             model={domeModel}
             selectedNodeId={selectedNodeId}
             onNavigateTo3D={() => setActiveTab("3d")}
+            innerSheathingParams={innerSheathingParams}
+            onChangeInnerSheathingParams={handleUpdateInnerSheathingParams}
           />
         )}
       </main>

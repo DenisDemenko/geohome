@@ -11,7 +11,12 @@ import {
   SolarGlazingParams,
   InnerSheathingParams
 } from "../core/types";
-import { PLYWOOD_MATERIALS, DEFAULT_SHEATHING_PARAMS, extractSheathingPanels } from "../core/sheathing";
+import {
+  PLYWOOD_MATERIALS,
+  DEFAULT_SHEATHING_PARAMS,
+  extractSheathingPanels,
+  calculateInnerSheathingNesting
+} from "../core/sheathing";
 import {
   DEFAULT_WINDOW_PARAMS,
   GLAZING_OPTIONS,
@@ -26,11 +31,22 @@ import {
   DEFAULT_DOOR_PARAMS,
   DEFAULT_SOLAR_PARAMS,
   DEFAULT_INNER_SHEATHING_PARAMS,
+  INNER_SHEATHING_MATERIALS,
   calculateSolarGeneration,
   calculateRectangularDoorPortal,
   calculateDoorwayTriangulationAndPanels,
   getWindowNodes
 } from "../core/conversions";
+import {
+  generateSheathingSheetDXF,
+  generateAllSheathingSheetsDXF,
+  downloadDXF
+} from "../export/dxfExport";
+import {
+  generateSheathingNestingSVG,
+  downloadFile
+} from "../export/svgExport";
+import { exportSheathingNestingPDF } from "../export/pdfExport";
 import {
   analyzeDomeSolar,
   DomeSolarAnalysis,
@@ -80,7 +96,11 @@ import {
   Pause,
   Square,
   Video,
-  Download
+  Download,
+  ClipboardList,
+  Copy,
+  Cpu,
+  FileText
 } from "lucide-react";
 import { ARModal } from "./ARModal";
 import { VideoExportModal, AnimationType, VideoExportOptions } from "./VideoExportModal";
@@ -835,7 +855,8 @@ interface Viewer3DProps {
   onSetFabricStripFaceIds?: (faceIds: number[]) => void;
   onCopyWindowsToFabricStrip?: () => void;
   onClearFabricStrip?: () => void;
-  onNavigateToSheathing?: () => void;
+  onNavigateToSheathing?: (tab?: "sheathing" | "fabric_roll" | "inner_sheathing" | "windows" | "solar") => void;
+  onNavigateToNesting?: (tab?: "sheathing" | "fabric_roll" | "inner_sheathing" | "windows" | "solar") => void;
 }
 
 export interface Display3DLayers {
@@ -882,7 +903,8 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
   onSetFabricStripFaceIds,
   onCopyWindowsToFabricStrip,
   onClearFabricStrip,
-  onNavigateToSheathing
+  onNavigateToSheathing,
+  onNavigateToNesting
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -947,15 +969,16 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
   const [isOrbitPlaying, setIsOrbitPlaying] = useState<boolean>(false);
   const [orbitSpeed, setOrbitSpeed] = useState<number>(1); // 0.5, 1, 2
   const [orbitDirection, setOrbitDirection] = useState<1 | -1>(1); // 1 = clockwise, -1 = counter-clockwise
-  const [orbitAltitude, setOrbitAltitude] = useState<"medium" | "low" | "high" | "wave">("medium");
+  const [orbitAltitude, setOrbitAltitude] = useState<"horizon" | "medium" | "low" | "high" | "wave">("horizon");
   const [orbitRecordDuration, setOrbitRecordDuration] = useState<number>(10);
   const [currentOrbitAngleDeg, setCurrentOrbitAngleDeg] = useState<number>(0);
+  const [currentElevationAngleDeg, setCurrentElevationAngleDeg] = useState<number>(30);
 
   const isOrbitActiveRef = useRef<boolean>(false);
   const isOrbitPlayingRef = useRef<boolean>(false);
   const orbitSpeedRef = useRef<number>(1);
   const orbitDirectionRef = useRef<1 | -1>(1);
-  const orbitAltitudeRef = useRef<"medium" | "low" | "high" | "wave">("medium");
+  const orbitAltitudeRef = useRef<"horizon" | "medium" | "low" | "high" | "wave">("horizon");
 
   useEffect(() => {
     isOrbitActiveRef.current = isOrbitActive;
@@ -1122,6 +1145,136 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     const baseDomePanelsCount = model.faces.length - activeDoorFaceIds.length - (model.windowFaceIds?.length || 0) - (model.solarFaceIds?.length || 0);
     return Math.max(0, totalProjectPanelsCount - baseDomePanelsCount);
   }, [model, totalProjectPanelsCount, activeDoorFaceIds]);
+
+  // Quick cutting list state & data calculation for inner sheathing
+  const [isInnerCuttingListOpen, setIsInnerCuttingListOpen] = useState<boolean>(false);
+  const [isCutlistCopied, setIsCutlistCopied] = useState<boolean>(false);
+
+  const innerCutlistData = useMemo(() => {
+    const typeCounts = new Map<string, number>();
+    for (const f of model.faces) {
+      if (activeDoorFaceIds.includes(f.id) || activeWindowFaceIds.includes(f.id)) continue;
+      typeCounts.set(f.type, (typeCounts.get(f.type) || 0) + 1);
+    }
+    const groupIndexMap = new Map<string, number>();
+    model.faceGroups.forEach((g, i) => groupIndexMap.set(g.type, i));
+
+    let totalPanels = 0;
+    let totalAreaM2 = 0;
+
+    const items = model.faceGroups
+      .filter(fg => (typeCounts.get(fg.type) || 0) > 0)
+      .map(fg => {
+        const count = typeCounts.get(fg.type) || 0;
+        const groupIdx = groupIndexMap.get(fg.type) ?? 0;
+        const color = SHEATHING_PALETTE[groupIdx % SHEATHING_PALETTE.length];
+        const areaPiece = fg.area || 0;
+        const typeArea = count * areaPiece;
+        totalPanels += count;
+        totalAreaM2 += typeArea;
+        return {
+          type: fg.type,
+          count,
+          color,
+          lengths: fg.lengths || [0, 0, 0],
+          areaPiece: Math.round(areaPiece * 1000) / 1000,
+          typeArea: Math.round(typeArea * 100) / 100
+        };
+      });
+
+    const matId = innerSheathingParams?.material || "drywall";
+    const matNames: Record<string, string> = {
+      drywall: "Гіпсокартон 12.5 мм",
+      chipboard: "ДСП плита 16 мм",
+      osb3: "Плита OSB-3 9 мм",
+      plywood_fk: "Фанера ФК 9 мм"
+    };
+    const materialName = matNames[matId] || "Гіпсокартон 12.5 мм";
+
+    // Standard sheet 2500x1250 mm = 3.125 m2 with 15% allowance for triangle offcuts
+    const sheetAreaM2 = 3.125;
+    const estSheets = Math.ceil((totalAreaM2 * 1.15) / sheetAreaM2);
+
+    return {
+      items,
+      totalPanels,
+      totalAreaM2: Math.round(totalAreaM2 * 10) / 10,
+      materialName,
+      sheetAreaM2,
+      estSheets
+    };
+  }, [model, activeDoorFaceIds, activeWindowFaceIds, innerSheathingParams?.material]);
+
+  const handleCopyInnerCutlist = () => {
+    let text = `📋 ВІДОМІСТЬ РОЗКРОЮ ВНУТРІШНЬОЇ ОБШИВКИ\n`;
+    text += `Купол: ${model.parameters.frequency}V, D = ${(model.parameters.diameter / 1000).toFixed(2)} м\n`;
+    text += `Матеріал: ${innerCutlistData.materialName}\n`;
+    text += `Всього деталей: ${innerCutlistData.totalPanels} шт | Площа: ${innerCutlistData.totalAreaM2} м²\n`;
+    text += `Орієнтовна потреба плит (2500×1250 мм): ~${innerCutlistData.estSheets} листів (із запасом на розкрій 15%)\n\n`;
+    text += `--------------------------------------------------------------------\n`;
+    text += `ТИП  | КОЛІР     | К-СТЬ | СТОРОНИ a × b × c (мм) | ПЛОЩА (м²)\n`;
+    text += `--------------------------------------------------------------------\n`;
+    innerCutlistData.items.forEach(it => {
+      const sides = `${Math.round(it.lengths[0])} × ${Math.round(it.lengths[1])} × ${Math.round(it.lengths[2])}`;
+      text += `${it.type.padEnd(5)}| ${it.color.padEnd(10)}| ${String(it.count).padStart(4)} шт | ${sides.padEnd(23)} | ${it.typeArea.toFixed(2)} м²\n`;
+    });
+    text += `--------------------------------------------------------------------\n`;
+    navigator.clipboard.writeText(text);
+    setIsCutlistCopied(true);
+    setTimeout(() => setIsCutlistCopied(false), 2500);
+  };
+
+  const getInnerNestingLayout = () => {
+    const matId = innerSheathingParams?.material || "drywall";
+    const matConfig = INNER_SHEATHING_MATERIALS.find(m => m.id === matId) || INNER_SHEATHING_MATERIALS[0];
+    return {
+      matConfig,
+      nesting: calculateInnerSheathingNesting(
+        model,
+        matConfig.standardSheet.w,
+        matConfig.standardSheet.h,
+        6,
+        15,
+        12,
+        3000,
+        1,
+        matConfig.name
+      )
+    };
+  };
+
+  const handleDownloadInnerDXF = () => {
+    const { matConfig, nesting } = getInnerNestingLayout();
+    const dxf = generateAllSheathingSheetsDXF(nesting);
+    downloadDXF(
+      `inner_sheathing_${matConfig.id}_all_sheets_${nesting.totalSheetsRequired}_${matConfig.standardSheet.w}x${matConfig.standardSheet.h}_D6mm.dxf`,
+      dxf
+    );
+  };
+
+  const handleDownloadInnerSVG = () => {
+    const { matConfig, nesting } = getInnerNestingLayout();
+    const svg = generateSheathingNestingSVG(nesting, 0);
+    downloadFile(
+      `inner_sheathing_${matConfig.id}_sheet_1_of_${nesting.totalSheetsRequired}_${matConfig.standardSheet.w}x${matConfig.standardSheet.h}_D6mm.svg`,
+      svg,
+      "image/svg+xml;charset=utf-8"
+    );
+  };
+
+  const handleDownloadInnerPDF = () => {
+    const { nesting } = getInnerNestingLayout();
+    exportSheathingNestingPDF(model, nesting);
+  };
+
+  const handleGoToInnerNesting = () => {
+    setIsInnerCuttingListOpen(false);
+    if (onNavigateToNesting) {
+      onNavigateToNesting("inner_sheathing");
+    } else if (onNavigateToSheathing) {
+      onNavigateToSheathing("inner_sheathing");
+    }
+  };
 
   const conversionModeRef = useRef(conversionMode);
   conversionModeRef.current = conversionMode;
@@ -1391,6 +1544,13 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       camera.position.set(x, y, z);
       camera.up.set(0, 0, 1);
       camera.lookAt(targetCenter.current);
+
+      // Keep radar & HUD state in sync with actual camera angles
+      const rad = ((theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      setCurrentOrbitAngleDeg(Math.round((rad / (Math.PI * 2)) * 360));
+      // Elevation angle relative to horizon: 0° is exact horizon, +90° is zenith, -90° is nadir
+      const elev = Math.round(90 - (phi * 180) / Math.PI);
+      setCurrentElevationAngleDeg(elev);
     }
     updateCamera();
 
@@ -1425,9 +1585,11 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         // Horizontal mouse movement rotates azimuth around dome vertical axis Z
         cameraSpherical.current.theta -= dx * 0.0075;
         // Vertical mouse movement changes altitude angle (phi)
+        // Full unconstrained vertical rotation: from top zenith (0.01 = +89°) through exact horizon (PI/2 = 0°)
+        // all the way to looking from underneath (-86° nadir, PI*0.98)
         cameraSpherical.current.phi = Math.max(
-          0.04,
-          Math.min(Math.PI * 0.49, cameraSpherical.current.phi - dy * 0.0075)
+          0.01,
+          Math.min(Math.PI * 0.98, cameraSpherical.current.phi - dy * 0.0075)
         );
         updateCamera();
       } else if (isPanningRef.current) {
@@ -1491,9 +1653,10 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         dragDistanceRef.current = Math.max(dragDistanceRef.current, totalDist);
 
         cameraSpherical.current.theta -= dx * 0.009;
+        // Full unconstrained vertical rotation on touch screens
         cameraSpherical.current.phi = Math.max(
-          0.04,
-          Math.min(Math.PI * 0.49, cameraSpherical.current.phi - dy * 0.009)
+          0.01,
+          Math.min(Math.PI * 0.98, cameraSpherical.current.phi - dy * 0.009)
         );
         updateCamera();
       } else if (e.touches.length >= 2) {
@@ -1723,14 +1886,16 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           // Dynamic 360° circular orbit respecting selected rotation direction and altitude preset
           cameraSpherical.current.theta = startTheta + progress * Math.PI * 2 * orbitDirectionRef.current;
           const alt = orbitAltitudeRef.current;
-          if (alt === "low") {
-            cameraSpherical.current.phi = Math.PI * 0.46;
+          if (alt === "horizon") {
+            cameraSpherical.current.phi = Math.PI * 0.5; // Exactly 0° to horizon
+          } else if (alt === "low") {
+            cameraSpherical.current.phi = Math.PI * 0.46; // ~7° elevation
           } else if (alt === "high") {
-            cameraSpherical.current.phi = Math.PI * 0.22;
+            cameraSpherical.current.phi = Math.PI * 0.22; // ~50° elevation (aerial)
           } else if (alt === "wave") {
-            cameraSpherical.current.phi = Math.PI * 0.35 + Math.sin(progress * Math.PI * 2) * 0.12;
+            cameraSpherical.current.phi = Math.PI * 0.5 + Math.sin(progress * Math.PI * 2) * 0.15;
           } else {
-            cameraSpherical.current.phi = Math.PI * 0.36;
+            cameraSpherical.current.phi = Math.PI * 0.36; // 45° iso
           }
           updateCamera();
         } else if (options.type === "assembly_timelapse") {
@@ -1790,12 +1955,14 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         cameraSpherical.current.theta += step;
 
         const alt = orbitAltitudeRef.current;
-        if (alt === "low") {
+        if (alt === "horizon") {
+          cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, Math.PI * 0.5, 0.06);
+        } else if (alt === "low") {
           cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, Math.PI * 0.46, 0.06);
         } else if (alt === "high") {
           cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, Math.PI * 0.22, 0.06);
         } else if (alt === "wave") {
-          const wavePhi = Math.PI * 0.35 + Math.sin(cameraSpherical.current.theta * 2) * 0.12;
+          const wavePhi = Math.PI * 0.5 + Math.sin(cameraSpherical.current.theta * 2) * 0.15;
           cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, wavePhi, 0.06);
         } else {
           cameraSpherical.current.phi = THREE.MathUtils.lerp(cameraSpherical.current.phi, Math.PI * 0.36, 0.06);
@@ -2047,6 +2214,28 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       }
     }
 
+    // 0.5 Render Leveled Tier Horizon Ring (Горизонт перекриття 2-го поверху для сфери та еліпса)
+    const leveledTiers = (model.tiers || []).filter(t => t.isLeveled && t.nodeCount >= 3);
+    for (const t of leveledTiers) {
+      const tNodes = t.nodeIds.map(id => model.nodes[id]).filter(Boolean);
+      if (tNodes.length < 3) continue;
+      const sortedTNodes = [...tNodes].sort((a, b) => {
+        return Math.atan2(a.position.y, a.position.x) - Math.atan2(b.position.y, b.position.x);
+      });
+      const points = sortedTNodes.map(n => new THREE.Vector3(n.position.x, n.position.y, n.position.z));
+      points.push(points[0].clone()); // close ring loop
+      const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
+      const lineMat = new THREE.LineDashedMaterial({
+        color: 0x10B981,
+        dashSize: Math.max(25, (model.parameters.diameter || 8000) * 0.02),
+        gapSize: Math.max(15, (model.parameters.diameter || 8000) * 0.01),
+        linewidth: 2.5
+      });
+      const floorRing = new THREE.Line(lineGeom, lineMat);
+      floorRing.computeLineDistances();
+      beamsGroup.add(floorRing);
+    }
+
     // Layer display conditions: independent control of beams, connectors, outer sheathing, inner sheathing, or all together
     const shouldRenderBeams =
       showBeams ||
@@ -2291,19 +2480,32 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
       const sharedInvisibleHitMat = new THREE.MeshBasicMaterial({ visible: false });
 
-      // Shared inner sheathing materials (drywall, chipboard, OSB, plywood)
+      // Inner sheathing material cache (supports color-coding by triangle type, drywall, chipboard, OSB, plywood)
       const innerMatConfig = innerSheathingParams?.material || "drywall";
-      let innerColor = 0xF3F4F6;
-      if (innerMatConfig === "chipboard") innerColor = 0xD8B896;
-      else if (innerMatConfig === "osb3") innerColor = 0xCE9E64;
-      else if (innerMatConfig === "plywood_fk") innerColor = 0xE6C291;
+      const isInnerColorByType = innerSheathingParams?.colorByTriangleType !== false;
 
-      const sharedInnerMat = new THREE.MeshStandardMaterial({
-        color: innerColor,
-        roughness: innerMatConfig === "drywall" ? 0.95 : 0.7,
-        metalness: 0.04,
-        side: THREE.DoubleSide
-      });
+      const innerMatCache = new Map<string, THREE.MeshStandardMaterial>();
+      const getInnerMat = (
+        colorHex: string,
+        materialType: string,
+        isSelected: boolean,
+        isDimmed: boolean
+      ): THREE.MeshStandardMaterial => {
+        const cacheKey = `${colorHex}_${materialType}_${isSelected}_${isDimmed}`;
+        let m = innerMatCache.get(cacheKey);
+        if (!m) {
+          m = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(isSelected ? "#FF5722" : colorHex),
+            roughness: materialType === "drywall" ? 0.85 : 0.65,
+            metalness: 0.04,
+            transparent: isDimmed,
+            opacity: isDimmed ? 0.22 : 1.0,
+            side: THREE.DoubleSide
+          });
+          innerMatCache.set(cacheKey, m);
+        }
+        return m;
+      };
 
       const sharedInnerBorderMat = new THREE.LineBasicMaterial({
         color: 0x94A3B8,
@@ -2891,15 +3093,66 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
           const innerGeom = new THREE.BufferGeometry().setFromPoints([ipA, ipC, ipB]);
           innerGeom.computeVertexNormals();
-          const innerMesh = new THREE.Mesh(innerGeom, sharedInnerMat);
+
+          // Distinct color by triangle type for inner sheathing
+          let innerColorHex: string;
+          if (isSelected) {
+            innerColorHex = "#FF5722";
+          } else if (isInnerColorByType) {
+            // Assign distinct color from the architectural palette according to the triangle type
+            innerColorHex = SHEATHING_PALETTE[groupIdx % SHEATHING_PALETTE.length];
+          } else {
+            let baseHex = "#F3F4F6";
+            if (innerMatConfig === "chipboard") baseHex = "#D8B896";
+            else if (innerMatConfig === "osb3") baseHex = "#CE9E64";
+            else if (innerMatConfig === "plywood_fk") baseHex = "#E6C291";
+            innerColorHex = baseHex;
+          }
+
+          const innerMat = getInnerMat(
+            innerColorHex,
+            innerMatConfig,
+            isSelected,
+            isDimmed
+          );
+
+          const innerMesh = new THREE.Mesh(innerGeom, innerMat);
           innerMesh.userData = { type: "face", faceId: face.id, isInner: true };
           innerSheathingGroup.add(innerMesh);
 
           // Interior panel border line
           const innerBorderGeom = new THREE.BufferGeometry().setFromPoints([ipA, ipB, ipC, ipA]);
-          const innerBorderLine = new THREE.Line(innerBorderGeom, sharedInnerBorderMat);
+          const innerBorderColor = isSelected ? 0xFFFFFF : isFiltered ? 0xDE7C5A : 0x2A3845;
+          const innerBorderMat = getBorderLineMat(
+            innerBorderColor,
+            isSelected ? 3 : 1.5,
+            isDimmed,
+            isDimmed ? 0.25 : 0.85
+          );
+          const innerBorderLine = new THREE.Line(innerBorderGeom, innerBorderMat);
           innerBorderLine.userData = { type: "face", faceId: face.id, isInner: true };
           innerSheathingGroup.add(innerBorderLine);
+
+          // Interior-facing 3D centroid label badge (visible from inside dome)
+          if (showTriangleLabels && !isDimmed) {
+            const typeName = face.type || `T${groupIdx + 1}`;
+            const spriteKey = `inner_${typeName}_${isSelected ? "#FF5722" : innerColorHex}_${isSelected ? "#FFF3E0" : "#FFFFFF"}`;
+            const labelTex = getTriangleLabelTexture(
+              typeName,
+              isSelected ? "#FF5722" : innerColorHex,
+              isSelected ? "#FFF3E0" : "#FFFFFF"
+            );
+            const spriteMat = getOrCreateSpriteMat(labelTex, spriteKey);
+            const sprite = new THREE.Sprite(spriteMat);
+            const spriteScale = Math.max(8, Math.min(220, avgSide * 0.22));
+            sprite.scale.set(spriteScale, spriteScale, 1);
+            sprite.position.copy(pCen).addScaledVector(
+              faceNormal,
+              inwardOffset - Math.max(1, spriteScale * 0.05)
+            );
+            sprite.userData = { type: "face", faceId: face.id, isInner: true };
+            triangleLabelsGroup.add(sprite);
+          }
         }
       }
     }
@@ -3333,6 +3586,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         let steelColor = 0x6e7e8e; // Realistic galvanized plate steel
         if (isSelected) steelColor = 0xff4b2b;
         else if (node.boundary) steelColor = 0xde7c5a; // warm coral/copper for foundation base
+        else if (node.isTierLeveled) steelColor = 0x10b981; // bright emerald for 2nd floor leveled ring
 
         const steelMat = getSteelMat(steelColor);
 
@@ -3543,6 +3797,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     solarParams,
     innerSheathingParams?.material,
     innerSheathingParams?.seamGapMm,
+    innerSheathingParams?.colorByTriangleType,
     conversionMode,
     solarAnalysis
   ]);
@@ -3779,52 +4034,59 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     link.click();
   };
 
-  // Camera presets
-  const resetCamera = () => {
+  // Camera presets with unconstrained angles and exact 0° horizon capability
+  const applyCameraPreset = (
+    theta: number,
+    phi: number,
+    radiusMultiplier = 3.2,
+    targetZ = model.parameters.height * 0.45
+  ) => {
     const domeR = model.parameters.diameter / 2;
     cameraSpherical.current = {
-      radius: domeR * 3.2,
-      theta: Math.PI / 4,
-      phi: Math.PI / 3
+      radius: domeR * radiusMultiplier,
+      theta,
+      phi
     };
-    targetCenter.current.set(0, 0, model.parameters.height * 0.45);
+    targetCenter.current.set(0, 0, targetZ);
     if (cameraRef.current) {
-      const { radius, theta, phi } = cameraSpherical.current;
-      cameraRef.current.position.set(
-        radius * Math.sin(phi) * Math.sin(theta),
-        radius * Math.sin(phi) * Math.cos(theta),
-        targetCenter.current.z + radius * Math.cos(phi)
-      );
+      const { radius } = cameraSpherical.current;
+      const x = targetCenter.current.x + radius * Math.sin(phi) * Math.sin(theta);
+      const y = targetCenter.current.y + radius * Math.sin(phi) * Math.cos(theta);
+      const z = targetCenter.current.z + radius * Math.cos(phi);
+      cameraRef.current.position.set(x, y, z);
+      cameraRef.current.up.set(0, 0, 1);
       cameraRef.current.lookAt(targetCenter.current);
     }
+    const rad = ((theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    setCurrentOrbitAngleDeg(Math.round((rad / (Math.PI * 2)) * 360));
+    const elev = Math.round(90 - (phi * 180) / Math.PI);
+    setCurrentElevationAngleDeg(elev);
+  };
+
+  const resetCamera = () => {
+    applyCameraPreset(Math.PI / 4, Math.PI / 3, 3.2, model.parameters.height * 0.45);
   };
 
   const setViewTop = () => {
-    const domeR = model.parameters.diameter / 2;
-    cameraSpherical.current = {
-      radius: domeR * 3.0,
-      theta: 0,
-      phi: 0.05
-    };
-    targetCenter.current.set(0, 0, model.parameters.height * 0.45);
-    if (cameraRef.current) {
-      cameraRef.current.position.set(0, 0.1, domeR * 3.0);
-      cameraRef.current.lookAt(targetCenter.current);
-    }
+    applyCameraPreset(0, 0.02, 3.0, model.parameters.height * 0.45);
   };
 
+  // Exact 0° horizontal facade view (side elevation centered on dome)
   const setViewFront = () => {
-    const domeR = model.parameters.diameter / 2;
-    cameraSpherical.current = {
-      radius: domeR * 3.2,
-      theta: 0,
-      phi: Math.PI * 0.48
-    };
-    targetCenter.current.set(0, 0, model.parameters.height * 0.45);
-    if (cameraRef.current) {
-      cameraRef.current.position.set(0, domeR * 3.2, model.parameters.height * 0.45);
-      cameraRef.current.lookAt(targetCenter.current);
-    }
+    applyCameraPreset(0, Math.PI * 0.5, 3.2, model.parameters.height * 0.45);
+  };
+
+  // Exact 0° horizon view aligned to ground / base plane
+  const setViewHorizon = (elevation: "ground" | "center" = "ground") => {
+    const targetZ = elevation === "ground"
+      ? Math.min(1800, model.parameters.height * 0.3)
+      : model.parameters.height * 0.45;
+    applyCameraPreset(0, Math.PI * 0.5, 3.2, targetZ);
+  };
+
+  // Underneath view (-25° to -30° elevation) to inspect foundation base and underside
+  const setViewUnder = () => {
+    applyCameraPreset(Math.PI / 4, Math.PI * 0.65, 3.2, model.parameters.height * 0.3);
   };
 
   const setViewInside = () => {
@@ -3842,8 +4104,10 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         radius * Math.sin(phi) * Math.cos(theta),
         model.parameters.height * 0.35 + radius * Math.cos(phi)
       );
+      cameraRef.current.up.set(0, 0, 1);
       cameraRef.current.lookAt(0, 0, model.parameters.height * 0.7);
     }
+    setCurrentElevationAngleDeg(Math.round(90 - (cameraSpherical.current.phi * 180) / Math.PI));
   };
 
   return (
@@ -4322,11 +4586,11 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
           <span className="w-[1px] h-4 bg-[#DCD6CA] mx-0.5 shrink-0" />
 
-          {/* Camera presets */}
+          {/* Camera presets with unconstrained 0° horizon capability */}
           <button
             type="button"
             onClick={setViewTop}
-            title="Вид зверху (План)"
+            title="Вид зверху (План 90°)"
             className="hidden sm:inline-block px-2 py-1 text-xs font-medium rounded-xl tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
           >
             План
@@ -4335,10 +4599,29 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           <button
             type="button"
             onClick={setViewFront}
-            title="Вид спереду (Фасад)"
+            title="Вид спереду (Фасад 0° точно до горизонту)"
             className="hidden sm:inline-block px-2 py-1 text-xs font-medium rounded-xl tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
           >
-            Фасад
+            Фасад 0°
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewHorizon("ground")}
+            title="Нульовий кут до горизонту на рівні основи / землі 0°"
+            className="hidden sm:inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-xl tactile-btn text-[#2C6246] bg-emerald-50/80 border border-emerald-300/80 shrink-0 cursor-pointer shadow-2xs"
+          >
+            <Compass className="w-3.5 h-3.5 text-emerald-600" />
+            <span>0° Горизонт</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={setViewUnder}
+            title="Огляд знизу (-25° від горизонту, для основи та повної сфери 1/1)"
+            className="hidden md:inline-block px-2 py-1 text-xs font-medium rounded-xl tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
+          >
+            Знизу
           </button>
 
           <button
@@ -4353,7 +4636,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
           <button
             type="button"
             onClick={resetCamera}
-            title="Скинути ракурс"
+            title="Скинути ракурс (35° ізометрія)"
             className="p-1 sm:p-1.5 rounded-xl text-xs tactile-btn text-[#4A5568] shrink-0 cursor-pointer"
           >
             <Maximize2 className="w-3.5 h-3.5" />
@@ -4372,10 +4655,17 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                   <RotateCw className={`w-4 h-4 ${isOrbitPlaying ? "animate-spin" : ""}`} />
                 </div>
                 <div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-bold text-xs text-[#1A2E3B]">360° Круговий обліт</span>
                     <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-200">
                       {currentOrbitAngleDeg}° / 360°
+                    </span>
+                    <span className={`font-mono text-[10px] font-bold px-1.5 py-0.2 rounded border ${
+                      currentElevationAngleDeg === 0
+                        ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                        : "bg-slate-100 text-slate-800 border-slate-200"
+                    }`}>
+                      Кут: {currentElevationAngleDeg === 0 ? "0° (Горизонт)" : `${currentElevationAngleDeg > 0 ? "+" : ""}${currentElevationAngleDeg}°`}
                     </span>
                   </div>
                   <p className="text-[10px] text-[#6B7280] hidden sm:block">
@@ -4448,20 +4738,28 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
               </button>
 
               {/* Altitude presets */}
-              <div className="flex items-center gap-1 ml-auto">
+              <div className="flex items-center gap-1 ml-auto flex-wrap">
                 <span className="text-[10px] font-semibold text-[#5A6778]">Ракурс:</span>
-                {(["low", "medium", "high", "wave"] as const).map(alt => (
+                {(["horizon", "low", "medium", "high", "wave"] as const).map(alt => (
                   <button
                     key={alt}
                     type="button"
                     onClick={() => setOrbitAltitude(alt)}
-                    className={`px-1.5 py-0.5 rounded-lg text-[10px] font-semibold transition-all ${
+                    className={`px-1.5 py-0.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer ${
                       orbitAltitude === alt
                         ? "bg-[#DE7C5A] text-white font-bold shadow-2xs"
                         : "bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6]"
                     }`}
                   >
-                    {alt === "low" ? "Фасад" : alt === "medium" ? "45° Ізо" : alt === "high" ? "Дрон ✈" : "Хвиля ~"}
+                    {alt === "horizon"
+                      ? "0° Горизонт"
+                      : alt === "low"
+                      ? "Фасад 7°"
+                      : alt === "medium"
+                      ? "45° Ізо"
+                      : alt === "high"
+                      ? "Дрон ✈"
+                      : "Хвиля ~"}
                   </button>
                 ))}
               </div>
@@ -4844,8 +5142,8 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
       {showInnerSheathing && (
         <div className="absolute top-20 sm:top-22 right-3 z-20 animate-in fade-in slide-in-from-top-2 duration-150">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/95 backdrop-blur-md border border-[#CBD5E1] shadow-md text-xs text-[#334155]">
-            <Home className="w-3.5 h-3.5 text-[#64748B]" />
+          <div className="flex items-center gap-2 p-1.5 px-3 rounded-xl bg-white/95 backdrop-blur-md border border-[#CBD5E1] shadow-md text-xs text-[#334155] flex-wrap">
+            <Home className="w-3.5 h-3.5 text-[#7C3AED]" />
             <span className="font-semibold text-[11px]">Внутрішня обшивка:</span>
             <select
               value={innerSheathingParams?.material || "drywall"}
@@ -4857,6 +5155,50 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
               <option value="osb3">Плита OSB-3 9 мм</option>
               <option value="plywood_fk">Фанера ФК 9 мм</option>
             </select>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (onChangeInnerSheathingParams) {
+                  const current = innerSheathingParams?.colorByTriangleType !== false;
+                  onChangeInnerSheathingParams({
+                    ...innerSheathingParams,
+                    colorByTriangleType: !current
+                  });
+                }
+              }}
+              title="Перемкнути кольори внутрішньої обшивки за типами трикутників"
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                innerSheathingParams?.colorByTriangleType !== false
+                  ? "bg-[#7C3AED] text-white shadow-2xs"
+                  : "bg-[#F1F5F9] text-[#64748B] hover:bg-[#E2E8F0]"
+              }`}
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>Кольори за видами {innerSheathingParams?.colorByTriangleType !== false ? "✓" : ""}</span>
+            </button>
+
+            {/* Button to open quick cutting list */}
+            <button
+              type="button"
+              onClick={() => setIsInnerCuttingListOpen(true)}
+              title="Сформувати короткий список трикутників кожного кольору/типу для розкрою"
+              className="px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all cursor-pointer bg-[#1E293B] hover:bg-[#334155] text-white shadow-2xs"
+            >
+              <ClipboardList className="w-3.5 h-3.5 text-amber-300" />
+              <span>Список для розкрою ({innerCutlistData.totalPanels} шт)</span>
+            </button>
+
+            {/* Direct CNC Nesting button */}
+            <button
+              type="button"
+              onClick={handleGoToInnerNesting}
+              title="Відкрити ЧПК нестінг та карти розкрою внутрішньої обшивки на листах"
+              className="px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all cursor-pointer bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-2xs"
+            >
+              <Cpu className="w-3.5 h-3.5 text-amber-200" />
+              <span>ЧПК-розкрій →</span>
+            </button>
           </div>
         </div>
       )}
@@ -5435,6 +5777,61 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         </div>
       )}
 
+      {/* Real-time Viewing Elevation Angle to Horizon HUD */}
+      {selectedNodeId === null && selectedEdgeId === null && (
+        <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 z-10 pointer-events-auto">
+          <div className="flex items-center gap-1.5 p-1 sm:p-1.5 px-2.5 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-white/90 shadow-md text-xs select-none">
+            <Compass className="w-3.5 h-3.5 text-[#5A6778] shrink-0" />
+            <span className="text-[11px] font-semibold text-[#5A6778] hidden xs:inline">Кут:</span>
+            <span
+              className={`font-mono text-[11px] font-bold px-1.5 py-0.5 rounded-md transition-colors ${
+                currentElevationAngleDeg === 0
+                  ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                  : currentElevationAngleDeg < 0
+                  ? "bg-purple-100 text-purple-800 border border-purple-200"
+                  : "bg-amber-100 text-amber-800 border border-amber-200"
+              }`}
+            >
+              {currentElevationAngleDeg === 0
+                ? "0° Горизонт"
+                : `${currentElevationAngleDeg > 0 ? "+" : ""}${currentElevationAngleDeg}°`}
+            </span>
+
+            {/* Quick 1-click angle snaps */}
+            <div className="flex items-center gap-1 border-l border-[#DCD6CA] pl-1.5">
+              <button
+                type="button"
+                onClick={() => setViewHorizon("ground")}
+                title="Швидкий перехід: 0° точно до горизонту (рівень основи / землі)"
+                className={`px-1.5 py-0.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
+                  currentElevationAngleDeg === 0
+                    ? "bg-emerald-600 text-white shadow-2xs"
+                    : "bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6]"
+                }`}
+              >
+                0°
+              </button>
+              <button
+                type="button"
+                onClick={() => resetCamera()}
+                title="Швидкий перехід: 35° ізометрія"
+                className="px-1.5 py-0.5 text-[10px] font-semibold rounded-md bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6] cursor-pointer"
+              >
+                35°
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewTop()}
+                title="Швидкий перехід: 90° зверху (план)"
+                className="px-1.5 py-0.5 text-[10px] font-semibold rounded-md bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6] cursor-pointer"
+              >
+                90°
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 3D Compass & Sun Orientation Indicator */}
       {(conversionMode === "solar" || Boolean(solarParams?.heatmapEnabled)) && (
         <div className="absolute bottom-3 left-3 z-10 pointer-events-auto">
@@ -5518,6 +5915,190 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         recordedVideoUrl={recordedVideoUrl}
         onTakeHighResSnapshot={handleTakeHighResSnapshot}
       />
+
+      {/* Quick Inner Sheathing Cutting List Modal */}
+      {isInnerCuttingListOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-[#FAF7F2] rounded-3xl border border-[#DCD6CA] shadow-2xl max-w-xl w-full max-h-[90vh] flex flex-col overflow-hidden text-[#1A2E3B]">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 sm:p-5 border-b border-[#E8E2D8] bg-white/70 backdrop-blur-md">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-[#7C3AED]/10 text-[#7C3AED] flex items-center justify-center shrink-0">
+                  <ClipboardList className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base leading-tight">
+                    Відомість розкрою внутрішньої обшивки
+                  </h3>
+                  <p className="text-[11px] text-[#5A6778] mt-0.5">
+                    {innerCutlistData.materialName} · {model.parameters.frequency}V (D = {(model.parameters.diameter / 1000).toFixed(2)} м)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsInnerCuttingListOpen(false)}
+                className="p-1.5 text-[#64748B] hover:text-[#1E293B] hover:bg-black/5 rounded-xl cursor-pointer transition-colors"
+                title="Закрити"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Metrics */}
+            <div className="grid grid-cols-3 gap-2 p-3 sm:p-4 bg-[#F3EFE6]/70 border-b border-[#E8E2D8] text-center">
+              <div className="bg-white p-2 sm:p-2.5 rounded-xl border border-[#E8E2D8] shadow-2xs">
+                <span className="text-[10px] uppercase font-bold text-[#64748B] block">Всього деталей</span>
+                <span className="font-mono font-black text-sm sm:text-base text-[#1E293B]">{innerCutlistData.totalPanels} шт</span>
+              </div>
+              <div className="bg-white p-2 sm:p-2.5 rounded-xl border border-[#E8E2D8] shadow-2xs">
+                <span className="text-[10px] uppercase font-bold text-[#64748B] block">Загальна площа</span>
+                <span className="font-mono font-black text-sm sm:text-base text-[#7C3AED]">{innerCutlistData.totalAreaM2} м²</span>
+              </div>
+              <div className="bg-white p-2 sm:p-2.5 rounded-xl border border-[#E8E2D8] shadow-2xs">
+                <span className="text-[10px] uppercase font-bold text-[#64748B] block">Потреба плит (2.5×1.25м)</span>
+                <span className="font-mono font-black text-sm sm:text-base text-emerald-700">~{innerCutlistData.estSheets} листів</span>
+              </div>
+            </div>
+
+            {/* Scrollable list by color and triangle type */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 max-h-[50vh]">
+              <div className="text-[11px] font-bold text-[#64748B] uppercase tracking-wider mb-1 flex items-center justify-between">
+                <span>Типи трикутників ({innerCutlistData.items.length} унікальних)</span>
+                <span>Кількість та розміри</span>
+              </div>
+
+              {innerCutlistData.items.map((it) => {
+                const pct = innerCutlistData.totalPanels > 0 
+                  ? Math.round((it.count / innerCutlistData.totalPanels) * 100) 
+                  : 0;
+                return (
+                  <div
+                    key={it.type}
+                    className="flex items-center justify-between p-2.5 sm:p-3 rounded-2xl bg-white border border-[#E8E2D8] hover:border-[#CBD5E1] shadow-2xs transition-all"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      {/* Color indicator swatch */}
+                      <div
+                        className="w-5 h-5 rounded-full border border-black/20 shadow-xs shrink-0"
+                        style={{ backgroundColor: it.color }}
+                        title={`Колір у 3D: ${it.color}`}
+                      />
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-bold text-xs sm:text-sm text-[#1A2E3B]">{it.type}</span>
+                          <span className="text-[10px] font-mono text-[#64748B] bg-[#F1F5F9] px-1.5 py-0.2 rounded">
+                            {it.color}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-[#5A6778] mt-0.5">
+                          Сторони: <span className="font-mono font-semibold">{Math.round(it.lengths[0])} × {Math.round(it.lengths[1])} × {Math.round(it.lengths[2])} мм</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <span className="font-mono font-bold text-xs sm:text-sm text-[#1E293B] bg-purple-50 text-[#6D28D9] border border-purple-200 px-2 py-0.5 rounded-lg">
+                          {it.count} шт
+                        </span>
+                        <span className="text-[10px] font-mono text-[#8C9BAE]">({pct}%)</span>
+                      </div>
+                      <div className="text-[10px] text-[#5A6778] mt-0.5">
+                        Площа: <span className="font-mono font-semibold">{it.typeArea} м²</span> ({it.areaPiece} м²/шт)
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* CNC Cutting & CAM Toolpath Section */}
+            <div className="p-3 sm:p-4 bg-gradient-to-r from-[#F8FAFC] to-[#EDE9FE]/40 border-t border-[#E8E2D8] flex flex-col gap-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-[#7C3AED] text-white flex items-center justify-center shrink-0">
+                    <Cpu className="w-4 h-4 text-amber-200" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-[#1E293B] block">ЧПК-розкрій внутрішньої обшивки (CAM / Nesting)</span>
+                    <span className="text-[10px] text-[#64748B]">
+                      Розкладка на стандартні листи {innerCutlistData.materialName} з урахуванням діаметра фрези Ø6мм
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGoToInnerNesting}
+                  className="px-3 py-1.5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm ml-auto"
+                  title="Перейти до повної інтерактивної панелі нестингу на листах"
+                >
+                  <Cpu className="w-3.5 h-3.5 text-amber-200" />
+                  <span>Відкрити повний нестінг →</span>
+                </button>
+              </div>
+
+              {/* Direct 1-Click Export Actions */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleDownloadInnerDXF}
+                  className="px-2.5 py-1.5 rounded-xl bg-[#1E293B] hover:bg-[#334155] text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                  title="Завантажити AutoCAD DXF файл з усіма розкладеними листами внутрішньої обшивки"
+                >
+                  <Download className="w-3.5 h-3.5 text-amber-300" />
+                  <span>DXF (Всі листи ЧПК)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadInnerSVG}
+                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-[#F3EFE6] border border-[#CBD5E1] text-[#1E293B] text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                  title="Завантажити векторне креслення карти розкрою Листа 1 у форматі SVG"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#7C3AED]" />
+                  <span>SVG (Карта Лист 1)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadInnerPDF}
+                  className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                  title="Сформувати PDF паспорт розкрою та всі аркуші розкладки для цеху"
+                >
+                  <FileText className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>PDF Альбом розкрою</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-between p-3 sm:p-4 border-t border-[#E8E2D8] bg-white/70 backdrop-blur-md flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleCopyInnerCutlist}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm ${
+                  isCutlistCopied
+                    ? "bg-emerald-600 text-white"
+                    : "bg-[#1E293B] hover:bg-[#334155] text-white"
+                }`}
+              >
+                {isCutlistCopied ? <Check className="w-4 h-4 text-white" /> : <Copy className="w-4 h-4" />}
+                <span>{isCutlistCopied ? "Список скопійовано!" : "Копіювати список для цеху"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsInnerCuttingListOpen(false)}
+                className="px-4 py-2 bg-white hover:bg-[#F3EFE6] border border-[#CBD5E1] rounded-xl text-xs font-semibold text-[#4A5568] transition-colors cursor-pointer"
+              >
+                Закрити
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -34,7 +34,8 @@ export const DEFAULT_INNER_SHEATHING_PARAMS: InnerSheathingParams = {
   thickness: 12.5,
   density: 800,
   seamGapMm: 0,
-  finish: "white"
+  finish: "white",
+  colorByTriangleType: true
 };
 
 export const INNER_SHEATHING_MATERIALS: {
