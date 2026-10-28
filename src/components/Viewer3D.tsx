@@ -100,10 +100,21 @@ import {
   ClipboardList,
   Copy,
   Cpu,
-  FileText
+  FileText,
+  Code,
+  RotateCcw
 } from "lucide-react";
 import { ARModal } from "./ARModal";
 import { VideoExportModal, AnimationType, VideoExportOptions } from "./VideoExportModal";
+import { ToolpathModal } from "./ToolpathModal";
+import {
+  ToolpathConfig,
+  DEFAULT_TOOLPATH_CONFIG,
+  DomeToolpathResult,
+  calculateDomeToolpath,
+  downloadMach3TapFile,
+  downloadGCodeFile
+} from "../core/toolpath";
 
 export type RenderMode = "beams" | "sheathing" | "hybrid" | "glass" | "connectors" | "wireframe";
 
@@ -630,6 +641,62 @@ function buildHumanFigure(): THREE.Group {
 }
 
 /**
+ * 3D CNC Spindle, ER20 Collet Chuck and Carbide End-Mill Tool Model
+ * Displays realistic router head moving along toolpath coordinates
+ */
+function buildSpindleCutter(toolDiameterMm: number = 6): THREE.Group {
+  const spindle = new THREE.Group();
+
+  // Spindle body (cylindrical dark anodized aluminum)
+  const bodyGeom = new THREE.CylinderGeometry(22, 22, 80, 16);
+  bodyGeom.rotateX(Math.PI / 2);
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0x1E293B,
+    metalness: 0.85,
+    roughness: 0.25
+  });
+  const body = new THREE.Mesh(bodyGeom, bodyMat);
+  body.position.z = 60;
+  spindle.add(body);
+
+  // ER20 Collet Nut (tapered stainless steel)
+  const colletGeom = new THREE.CylinderGeometry(15, 11, 24, 16);
+  colletGeom.rotateX(Math.PI / 2);
+  const colletMat = new THREE.MeshStandardMaterial({
+    color: 0x94A3B8,
+    metalness: 0.95,
+    roughness: 0.15
+  });
+  const collet = new THREE.Mesh(colletGeom, colletMat);
+  collet.position.z = 12;
+  spindle.add(collet);
+
+  // Solid Carbide End-mill tool shank & flute
+  const cutterRadius = Math.max(1, toolDiameterMm / 2);
+  const cutterGeom = new THREE.CylinderGeometry(cutterRadius, cutterRadius, 32, 12);
+  cutterGeom.rotateX(Math.PI / 2);
+  const cutterMat = new THREE.MeshStandardMaterial({
+    color: 0xE2E8F0,
+    metalness: 0.95,
+    roughness: 0.1
+  });
+  const cutter = new THREE.Mesh(cutterGeom, cutterMat);
+  cutter.position.z = -4;
+  spindle.add(cutter);
+
+  // High-visibility cutting contact point / chip focal tip at local (0, 0, 0)
+  const tipGeom = new THREE.SphereGeometry(Math.max(1.8, cutterRadius * 1.3), 8, 8);
+  const tipMat = new THREE.MeshBasicMaterial({
+    color: 0xF97316
+  });
+  const tip = new THREE.Mesh(tipGeom, tipMat);
+  tip.position.z = 0;
+  spindle.add(tip);
+
+  return spindle;
+}
+
+/**
  * Natural environment landscape: green lawn ground disc and decorative low-poly trees
  */
 function buildNatureLandscape(diameter: number): THREE.Group {
@@ -921,6 +988,8 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
   const hitMeshesGroupRef = useRef<THREE.Group | null>(null);
   const nodeLabelsGroupRef = useRef<THREE.Group | null>(null);
   const triangleLabelsGroupRef = useRef<THREE.Group | null>(null);
+  const toolpathGroupRef = useRef<THREE.Group | null>(null);
+  const spindleMeshRef = useRef<THREE.Group | null>(null);
 
   const [renderMode, setRenderMode] = useState<RenderMode>("beams");
   const [autoRotate, setAutoRotate] = useState(false);
@@ -995,6 +1064,36 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
   useEffect(() => {
     orbitAltitudeRef.current = orbitAltitude;
   }, [orbitAltitude]);
+
+  // CNC CAM Toolpath Preview State & Autodesk Fusion Mach2/Mach3 Post-processor
+  const [isToolpathActive, setIsToolpathActive] = useState<boolean>(false);
+  const [toolpathConfig, setToolpathConfig] = useState<ToolpathConfig>(DEFAULT_TOOLPATH_CONFIG);
+  const [isToolpathModalOpen, setIsToolpathModalOpen] = useState<boolean>(false);
+  const [toolpathSimProgress, setToolpathSimProgress] = useState<number>(0);
+  const [isToolpathSimPlaying, setIsToolpathSimPlaying] = useState<boolean>(false);
+  const [toolpathSimSpeed, setToolpathSimSpeed] = useState<number>(1.5);
+  const [toolpathScope, setToolpathScope] = useState<"all" | "selected">("all");
+  const [isToolpathHudMinimized, setIsToolpathHudMinimized] = useState<boolean>(() => {
+    return typeof window !== "undefined" ? window.innerWidth < 768 : false;
+  });
+
+  const isToolpathActiveRef = useRef<boolean>(false);
+  const isToolpathSimPlayingRef = useRef<boolean>(false);
+  const toolpathSimSpeedRef = useRef<number>(1.5);
+  const toolpathSimProgressRef = useRef<number>(0);
+
+  useEffect(() => {
+    isToolpathActiveRef.current = isToolpathActive;
+  }, [isToolpathActive]);
+  useEffect(() => {
+    isToolpathSimPlayingRef.current = isToolpathSimPlaying;
+  }, [isToolpathSimPlaying]);
+  useEffect(() => {
+    toolpathSimSpeedRef.current = toolpathSimSpeed;
+  }, [toolpathSimSpeed]);
+  useEffect(() => {
+    toolpathSimProgressRef.current = toolpathSimProgress;
+  }, [toolpathSimProgress]);
 
   // Exploded View (Вибух-схема) State
   const [explodedProgress, setExplodedProgress] = useState(0);
@@ -1275,6 +1374,53 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
       onNavigateToSheathing("inner_sheathing");
     }
   };
+
+  // Real-time CAM toolpath calculation for dome sheathing triangles
+  const toolpathResult: DomeToolpathResult = useMemo(() => {
+    return calculateDomeToolpath(
+      model,
+      toolpathConfig,
+      toolpathScope === "selected" ? selectedFaceId : null,
+      filterTriangleType
+    );
+  }, [model, toolpathConfig, toolpathScope, selectedFaceId, filterTriangleType]);
+
+  const updateSpindlePosition = (progress: number) => {
+    if (!spindleMeshRef.current || !toolpathResult || toolpathResult.allSegments.length === 0) return;
+    const segments = toolpathResult.allSegments;
+    const totalDist = toolpathResult.metrics.totalDistanceMeters * 1000;
+    if (totalDist <= 0) return;
+
+    const targetDist = Math.max(0, Math.min(1, progress)) * totalDist;
+    let accumulated = 0;
+    let currentSeg = segments[0];
+    let segT = 0;
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const dx = seg.to.x - seg.from.x;
+      const dy = seg.to.y - seg.from.y;
+      const dz = seg.to.z - seg.from.z;
+      const segLen = Math.hypot(dx, dy, dz);
+
+      if (accumulated + segLen >= targetDist || i === segments.length - 1) {
+        currentSeg = seg;
+        segT = segLen > 0 ? (targetDist - accumulated) / segLen : 0;
+        break;
+      }
+      accumulated += segLen;
+    }
+
+    const px = currentSeg.from.x + (currentSeg.to.x - currentSeg.from.x) * segT;
+    const py = currentSeg.from.y + (currentSeg.to.y - currentSeg.from.y) * segT;
+    const pz = currentSeg.from.z + (currentSeg.to.z - currentSeg.from.z) * segT;
+
+    spindleMeshRef.current.position.set(px, py, pz);
+  };
+
+  useEffect(() => {
+    updateSpindlePosition(toolpathSimProgress);
+  }, [toolpathSimProgress]);
 
   const conversionModeRef = useRef(conversionMode);
   conversionModeRef.current = conversionMode;
@@ -1977,6 +2123,15 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         updateCamera();
         const rad = ((cameraSpherical.current.theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
         setCurrentOrbitAngleDeg(Math.round((rad / (Math.PI * 2)) * 360));
+      }
+
+      // CAM CNC Toolpath simulation animation driver
+      if (isToolpathActiveRef.current && isToolpathSimPlayingRef.current) {
+        const delta = 0.0012 * toolpathSimSpeedRef.current;
+        let next = toolpathSimProgressRef.current + delta;
+        if (next >= 1.0) next = 0;
+        toolpathSimProgressRef.current = next;
+        setToolpathSimProgress(next);
       }
 
       renderer.render(scene, camera);
@@ -3762,6 +3917,9 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     group.add(hitMeshesGroup);
     group.add(nodeLabelsGroup);
     group.add(triangleLabelsGroup);
+    const toolpathGroup = new THREE.Group();
+    toolpathGroupRef.current = toolpathGroup;
+    group.add(toolpathGroup);
 
     // Initial layer visibility
     const effShowBeams = showBeams || renderMode === "beams" || renderMode === "hybrid" || renderMode === "wireframe" || assemblyState.isActive;
@@ -3887,6 +4045,96 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
     animId = requestAnimationFrame(cycle);
     return () => cancelAnimationFrame(animId);
   }, [isExplodedPlaying]);
+
+  // Synchronize 3D CNC Toolpath visualization lines and Spindle Cutter head
+  useEffect(() => {
+    if (!toolpathGroupRef.current) return;
+    const group = toolpathGroupRef.current;
+
+    // Dispose previous toolpath objects
+    while (group.children.length > 0) {
+      const child = group.children[0];
+      if ((child as any).geometry) (child as any).geometry.dispose();
+      if ((child as any).material) {
+        if (Array.isArray((child as any).material)) {
+          (child as any).material.forEach((m: any) => m?.dispose?.());
+        } else {
+          (child as any).material.dispose?.();
+        }
+      }
+      group.remove(child);
+    }
+
+    if (!isToolpathActive || !toolpathResult || toolpathResult.allSegments.length === 0) {
+      spindleMeshRef.current = null;
+      return;
+    }
+
+    // Segregate segments by motion type for clear color coding
+    const rapidPoints: number[] = [];
+    const cutPoints: number[] = [];
+    const plungePoints: number[] = [];
+    const retractPoints: number[] = [];
+    const tabPoints: number[] = [];
+
+    for (const seg of toolpathResult.allSegments) {
+      const p1 = seg.from;
+      const p2 = seg.to;
+      const arr =
+        seg.type === "tab"
+          ? tabPoints
+          : seg.type === "plunge"
+          ? plungePoints
+          : seg.type === "retract"
+          ? retractPoints
+          : seg.type === "rapid"
+          ? rapidPoints
+          : cutPoints;
+
+      arr.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+    }
+
+    const createLineSegmentsMesh = (coords: number[], color: number, opacity = 0.9) => {
+      if (coords.length === 0) return null;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.Float32BufferAttribute(coords, 3));
+      const mat = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthTest: true
+      });
+      return new THREE.LineSegments(geom, mat);
+    };
+
+    // 1. Rapid G0 lines (Cyan)
+    const rapidMesh = createLineSegmentsMesh(rapidPoints, 0x38BDF8, 0.65);
+    if (rapidMesh) group.add(rapidMesh);
+
+    // 2. Cutting G1 lines (High-vis CNC safety orange)
+    const cutMesh = createLineSegmentsMesh(cutPoints, 0xF97316, 0.95);
+    if (cutMesh) group.add(cutMesh);
+
+    // 3. Plunge G1 lines (Lime green)
+    const plungeMesh = createLineSegmentsMesh(plungePoints, 0x4ADE80, 0.95);
+    if (plungeMesh) group.add(plungeMesh);
+
+    // 4. Retract G0 lines (Crimson red)
+    const retractMesh = createLineSegmentsMesh(retractPoints, 0xF43F5E, 0.85);
+    if (retractMesh) group.add(retractMesh);
+
+    // 5. Holding tabs (Gold yellow)
+    const tabMesh = createLineSegmentsMesh(tabPoints, 0xFACC15, 0.95);
+    if (tabMesh) group.add(tabMesh);
+
+    // 6. Build CNC Spindle / Cutter 3D model
+    const spindle = buildSpindleCutter(toolpathConfig.toolDiameterMm);
+    group.add(spindle);
+    spindleMeshRef.current = spindle;
+
+    // Position spindle at current progress
+    updateSpindlePosition(toolpathSimProgressRef.current);
+  }, [isToolpathActive, toolpathResult, toolpathConfig.toolDiameterMm]);
 
   // Environment lighting & sky theme synchronization
   useEffect(() => {
@@ -4503,6 +4751,35 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             )}
           </button>
 
+          {/* Button: CNC CAM Toolpath Preview Mode */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !isToolpathActive;
+              setIsToolpathActive(next);
+              if (next && !showOuterSheathing && !showInnerSheathing) {
+                if (toolpathConfig.layer === "inner") {
+                  handleToggleInnerSheathing();
+                } else {
+                  handleToggleOuterSheathing();
+                }
+              }
+            }}
+            title="Toolpath Preview: візуалізація траєкторії руху фрези ЧПК та генерація Mach3 G-коду"
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer shrink-0 ${
+              isToolpathActive
+                ? "bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white shadow-md ring-2 ring-orange-400"
+                : "bg-white hover:bg-[#FAF7F2] text-[#C2410C] border border-orange-200 shadow-2xs"
+            }`}
+          >
+            <Cpu className={`w-3.5 h-3.5 ${isToolpathActive ? "text-amber-200" : "text-[#F97316]"}`} />
+            <span className="hidden sm:inline">Траєкторія фрези</span>
+            <span className="sm:hidden text-[11px]">Фреза ЧПК</span>
+            {isToolpathActive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+            )}
+          </button>
+
           {/* Button 'Перегляд в AR' */}
           <button
             type="button"
@@ -4872,6 +5149,392 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* CNC CAM Toolpath Simulation & G-Code Mach3 Control HUD */}
+      {isToolpathActive && (
+        <div className="absolute top-20 sm:top-22 left-2 right-2 sm:left-4 sm:right-auto z-20 animate-in fade-in slide-in-from-top-2 duration-150 max-w-[calc(100%-16px)] sm:max-w-2xl">
+          {isToolpathHudMinimized ? (
+            /* Super compact mobile-friendly transport pill (only ~38px high) */
+            <div className="flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-[#F97316] shadow-xl text-xs text-[#1A2E3B]">
+              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                {/* Play / Pause button */}
+                <button
+                  type="button"
+                  onClick={() => setIsToolpathSimPlaying(!isToolpathSimPlaying)}
+                  className={`w-7 h-7 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center shrink-0 shadow-2xs ${
+                    isToolpathSimPlaying
+                      ? "bg-[#1A2E3B] text-white"
+                      : "bg-[#F97316] text-white hover:bg-[#EA580C]"
+                  }`}
+                  title={isToolpathSimPlaying ? "Призупинити симуляцію фрези" : "Запустити 3D симуляцію руху фрези"}
+                >
+                  {isToolpathSimPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                </button>
+
+                {/* Progress scrub slider */}
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.001}
+                  value={toolpathSimProgress}
+                  onChange={e => {
+                    const val = parseFloat(e.target.value);
+                    setToolpathSimProgress(val);
+                    updateSpindlePosition(val);
+                  }}
+                  className="w-20 xs:w-28 sm:w-36 h-2 rounded-lg bg-[#E8E2D8] accent-[#F97316] cursor-pointer shrink"
+                  title="Повзунок проходу фрези"
+                />
+
+                <span className="font-mono font-bold text-[10px] bg-white px-1.5 py-0.5 rounded border border-[#CBD5E1] shrink-0 min-w-[34px] text-center">
+                  {Math.round(toolpathSimProgress * 100)}%
+                </span>
+
+                {/* Speed toggle cycler */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const speeds = [0.5, 1, 2, 5];
+                    const nextIdx = (speeds.indexOf(toolpathSimSpeed) + 1) % speeds.length;
+                    setToolpathSimSpeed(speeds[nextIdx]);
+                  }}
+                  className="px-1.5 py-0.5 rounded-lg font-mono font-bold text-[10px] bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6] shrink-0"
+                  title="Швидкість симуляції"
+                >
+                  {toolpathSimSpeed}x
+                </button>
+
+                {/* Layer indicator badge */}
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-[#C2410C] border border-orange-200 hidden xs:inline shrink-0">
+                  {toolpathConfig.layer === "outer" ? "Зовн." : "Внутр."} Ø{toolpathConfig.toolDiameterMm}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1 shrink-0">
+                {/* Direct G-code (.gcode) download button */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadGCodeFile(
+                      toolpathResult.gcode,
+                      `${model.parameters.frequency}V_Mach3_Dome_Toolpath`,
+                      "gcode"
+                    )
+                  }
+                  className="px-2 py-1 rounded-xl bg-gradient-to-r from-[#10B981] to-[#059669] hover:brightness-110 text-white text-[10px] font-bold flex items-center gap-1 shadow-2xs cursor-pointer"
+                  title="Завантажити керуючу програму у форматі G-code (.gcode) для верстата ЧПУ"
+                >
+                  <Download className="w-3 h-3 text-white" />
+                  <span>G-code</span>
+                </button>
+
+                {/* G-code modal button */}
+                <button
+                  type="button"
+                  onClick={() => setIsToolpathModalOpen(true)}
+                  className="px-2 py-1 rounded-xl bg-[#1E293B] hover:bg-[#334155] text-white text-[10px] font-bold flex items-center gap-1 shadow-2xs cursor-pointer"
+                  title="Переглянути G-код Mach3"
+                >
+                  <Code className="w-3 h-3 text-amber-300" />
+                  <span className="hidden xs:inline">Код</span>
+                </button>
+
+                {/* Expand detailed CAM settings */}
+                <button
+                  type="button"
+                  onClick={() => setIsToolpathHudMinimized(false)}
+                  className="px-2 py-1 rounded-xl bg-orange-50 hover:bg-orange-100 text-[#C2410C] border border-orange-200 text-[10px] font-bold flex items-center gap-1 shadow-2xs cursor-pointer"
+                  title="Розгорнути детальні параметри та легенду ЧПК"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span className="hidden xs:inline">Опції</span>
+                </button>
+
+                {/* Close Toolpath */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsToolpathActive(false);
+                    setIsToolpathSimPlaying(false);
+                  }}
+                  className="p-1 text-[#64748B] hover:text-[#1E293B] hover:bg-black/5 rounded-xl cursor-pointer"
+                  title="Вимкнути режим траєкторій"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Full expanded CAM controls card with Minimize toggle */
+            <div className="flex flex-col gap-2 p-2.5 sm:p-3 rounded-2xl tactile-card backdrop-blur-md bg-[#FAF7F2]/95 border border-[#F97316] shadow-xl text-xs text-[#1A2E3B] max-h-[75vh] overflow-y-auto">
+              {/* Top row: Title, parts count, cutting length, play/pause, minimize, close */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-xl bg-gradient-to-tr from-[#F97316] to-[#EA580C] flex items-center justify-center text-white shadow-2xs shrink-0">
+                    <Cpu className="w-4 h-4 text-amber-200" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-bold text-xs text-[#1A2E3B]">ЧПК Траєкторія (Toolpath Preview)</span>
+                      <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-orange-100 text-orange-900 border border-orange-300">
+                        {toolpathResult.triangles.length} трик.
+                      </span>
+                      <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 text-amber-900 border border-amber-300">
+                        Ø{toolpathConfig.toolDiameterMm} мм
+                      </span>
+                      <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-800 border border-emerald-300">
+                        {toolpathResult.metrics.totalDistanceMeters} м
+                      </span>
+                      <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-blue-50 text-blue-800 border border-blue-200">
+                        {toolpathResult.metrics.estimatedTimeMinutes} хв
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#6B7280] hidden sm:block">
+                      Постпроцесор: Autodesk Fusion Mach3Mill ({toolpathConfig.postProcessor === "mach3" ? "Mach3" : "Mach2"}) • {toolpathConfig.layer === "outer" ? "Зовнішня обшивка" : "Внутрішня обшивка"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* Play / Pause button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsToolpathSimPlaying(!isToolpathSimPlaying)}
+                    className={`px-2.5 py-1 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center gap-1 shadow-2xs ${
+                      isToolpathSimPlaying
+                        ? "bg-[#1A2E3B] text-white"
+                        : "bg-[#F97316] text-white hover:bg-[#EA580C]"
+                    }`}
+                    title={isToolpathSimPlaying ? "Призупинити рух фрези" : "Запустити 3D симуляцію руху фрези"}
+                  >
+                    {isToolpathSimPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                    <span>{isToolpathSimPlaying ? "Пауза" : "Пуск"}</span>
+                  </button>
+
+                  {/* Reset progress */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setToolpathSimProgress(0);
+                      updateSpindlePosition(0);
+                    }}
+                    className="p-1 text-[#64748B] hover:text-[#1E293B] hover:bg-black/5 rounded-xl cursor-pointer"
+                    title="Скинути симуляцію на початок"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Minimize button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsToolpathHudMinimized(true)}
+                    className="p-1 text-[#C2410C] hover:text-[#9A3412] hover:bg-orange-100/60 rounded-xl cursor-pointer"
+                    title="Згорнути панель (щоб бачити весь купол)"
+                  >
+                    <ChevronUp className="w-4 h-4" />
+                  </button>
+
+                  {/* Close bar */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsToolpathActive(false);
+                      setIsToolpathSimPlaying(false);
+                    }}
+                    className="p-1 text-[#64748B] hover:text-[#1E293B] hover:bg-black/5 rounded-xl cursor-pointer"
+                    title="Вимкнути режим траєкторій"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Middle row: Scrubbing slider and simulation controls */}
+              <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-[#E8E2D8] text-[11px]">
+                <span className="text-[10px] font-semibold text-[#5A6778]">Прогрес:</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.001}
+                  value={toolpathSimProgress}
+                  onChange={e => {
+                    const val = parseFloat(e.target.value);
+                    setToolpathSimProgress(val);
+                    updateSpindlePosition(val);
+                  }}
+                  className="flex-1 min-w-[120px] h-2 rounded-lg bg-[#E8E2D8] accent-[#F97316] cursor-pointer"
+                />
+                <span className="font-mono font-bold text-[10px] bg-white px-1.5 py-0.5 rounded border border-[#CBD5E1]">
+                  {Math.round(toolpathSimProgress * 100)}%
+                </span>
+
+                {/* Speed */}
+                <div className="flex items-center gap-1 ml-auto">
+                  <span className="text-[10px] font-semibold text-[#5A6778]">Швидкість:</span>
+                  {[0.5, 1, 2, 5].map(spd => (
+                    <button
+                      key={spd}
+                      type="button"
+                      onClick={() => setToolpathSimSpeed(spd)}
+                      className={`px-1.5 py-0.5 rounded-lg font-mono font-bold text-[10px] transition-all cursor-pointer ${
+                        toolpathSimSpeed === spd
+                          ? "bg-[#F97316] text-white shadow-2xs"
+                          : "bg-white border border-[#DCD6CA] text-[#4A5568] hover:bg-[#F3EFE6]"
+                      }`}
+                    >
+                      {spd}x
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Settings row: Layer switch, Scope (All vs Selected), Tabs toggle */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[#E8E2D8]">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Layer switcher */}
+                  <div className="flex items-center rounded-xl bg-white border border-[#DCD6CA] p-0.5 shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setToolpathConfig(prev => ({ ...prev, layer: "outer" }));
+                        if (!showOuterSheathing) handleToggleOuterSheathing();
+                      }}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                        toolpathConfig.layer === "outer"
+                          ? "bg-[#DE7C5A] text-white shadow-2xs"
+                          : "text-[#5A6778] hover:text-[#1A2E3B]"
+                      }`}
+                    >
+                      Зовнішня обшивка
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setToolpathConfig(prev => ({ ...prev, layer: "inner" }));
+                        if (!showInnerSheathing) handleToggleInnerSheathing();
+                      }}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                        toolpathConfig.layer === "inner"
+                          ? "bg-[#7C3AED] text-white shadow-2xs"
+                          : "text-[#5A6778] hover:text-[#1A2E3B]"
+                      }`}
+                    >
+                      Внутрішня обшивка
+                    </button>
+                  </div>
+
+                  {/* Scope switcher */}
+                  <div className="flex items-center rounded-xl bg-white border border-[#DCD6CA] p-0.5 shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => setToolpathScope("all")}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                        toolpathScope === "all"
+                          ? "bg-[#1A2E3B] text-white shadow-2xs"
+                          : "text-[#5A6778] hover:text-[#1A2E3B]"
+                      }`}
+                    >
+                      Всі трикутники ({model.faces.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setToolpathScope("selected")}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                        toolpathScope === "selected"
+                          ? "bg-[#F97316] text-white shadow-2xs"
+                          : "text-[#5A6778] hover:text-[#1A2E3B]"
+                      }`}
+                    >
+                      {selectedFaceId !== null ? `Вибраний #${selectedFaceId}` : "Вибрати трикутник"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Action buttons: Direct G-code download, .TAP download, Open G-code Modal */}
+                <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+                  {/* Primary G-code (.gcode) export */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadGCodeFile(
+                        toolpathResult.gcode,
+                        `${model.parameters.frequency}V_Mach3_Dome_Toolpath`,
+                        "gcode"
+                      )
+                    }
+                    className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-[#10B981] to-[#059669] hover:brightness-110 text-white text-[11px] font-bold flex items-center gap-1 shadow-xs transition-all cursor-pointer whitespace-nowrap"
+                    title="Завантажити готову програму у форматі G-code (.gcode) за параметрами постпроцесора Mach3"
+                  >
+                    <Download className="w-3.5 h-3.5 text-white" />
+                    <span>Завантажити G-code</span>
+                  </button>
+
+                  {/* Mach3 .TAP export */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadGCodeFile(
+                        toolpathResult.gcode,
+                        `${model.parameters.frequency}V_Mach3_Dome_Toolpath`,
+                        "tap"
+                      )
+                    }
+                    className="px-2 py-1 rounded-xl bg-[#F97316] hover:bg-[#EA580C] text-white text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer whitespace-nowrap"
+                    title="Завантажити керуючий файл у форматі .TAP для ЧПК-контролерів Mach3 / Mach2"
+                  >
+                    <Download className="w-3 h-3 text-amber-200" />
+                    <span>.TAP (Mach3)</span>
+                  </button>
+
+                  {/* View Full Code Modal */}
+                  <button
+                    type="button"
+                    onClick={() => setIsToolpathModalOpen(true)}
+                    className="px-2 py-1 rounded-xl bg-[#1E293B] hover:bg-[#334155] text-white text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer whitespace-nowrap"
+                    title="Переглянути та налаштувати повний G-код"
+                  >
+                    <Code className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Перегляд</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Color Legend Row */}
+              <div className="flex items-center gap-3 pt-1 border-t border-[#E8E2D8] text-[9px] text-[#64748B] flex-wrap">
+                <span className="font-semibold text-[#1A2E3B]">Легенда ходів:</span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-[#38BDF8]" /> G0 Холостий
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-[#4ADE80]" /> G1 Врізання
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-[#F97316]" /> G1 Різання
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-[#FACC15]" /> Перемичка
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-[#F43F5E]" /> G0 Відведення
+                </span>
+              </div>
+
+              {/* Bottom Quick Collapse Button for unobstructed 3D view */}
+              <button
+                type="button"
+                onClick={() => setIsToolpathHudMinimized(true)}
+                className="w-full mt-1 py-1 text-[11px] font-semibold text-[#C2410C] bg-orange-50/70 hover:bg-orange-100/70 border border-orange-200/80 rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer"
+                title="Згорнути в компактну смужку для вільного огляду купола"
+              >
+                <ChevronUp className="w-3.5 h-3.5" />
+                <span>Згорнути вікно (відкрити повний огляд купола)</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -6028,15 +6691,32 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleGoToInnerNesting}
-                  className="px-3 py-1.5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm ml-auto"
-                  title="Перейти до повної інтерактивної панелі нестингу на листах"
-                >
-                  <Cpu className="w-3.5 h-3.5 text-amber-200" />
-                  <span>Відкрити повний нестінг →</span>
-                </button>
+                <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsInnerCuttingListOpen(false);
+                      setToolpathConfig(prev => ({ ...prev, layer: "inner" }));
+                      setIsToolpathActive(true);
+                      if (!showInnerSheathing) handleToggleInnerSheathing();
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:opacity-95 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                    title="Увімкнути режим 3D траєкторії руху фрези для внутрішньої обшивки купола"
+                  >
+                    <Cpu className="w-3.5 h-3.5 text-amber-200" />
+                    <span>⚡ Траєкторія фрези ЧПК</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleGoToInnerNesting}
+                    className="px-3 py-1.5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                    title="Перейти до повної інтерактивної панелі нестингу на листах"
+                  >
+                    <Cpu className="w-3.5 h-3.5 text-amber-200" />
+                    <span>Відкрити повний нестінг →</span>
+                  </button>
+                </div>
               </div>
 
               {/* Direct 1-Click Export Actions */}
@@ -6098,6 +6778,21 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* CNC CAM Mach3 Toolpath & G-Code Generation Modal */}
+      {isToolpathModalOpen && (
+        <ToolpathModal
+          isOpen={isToolpathModalOpen}
+          onClose={() => setIsToolpathModalOpen(false)}
+          toolpathResult={toolpathResult}
+          selectedTriangleId={selectedFaceId}
+          onSelectTriangle={onSelectFace}
+          config={toolpathConfig}
+          onChangeConfig={(partial) => setToolpathConfig(prev => ({ ...prev, ...partial }))}
+          frequency={model.parameters.frequency}
+          diameterMm={model.parameters.diameter}
+        />
       )}
     </div>
   );

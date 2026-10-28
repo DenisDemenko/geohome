@@ -42,11 +42,21 @@ import {
 } from "../export/dxfExport";
 import { exportSheathingNestingPDF } from "../export/pdfExport";
 import { InsulationCalculatorPanel } from "./InsulationCalculatorPanel";
+import { SheetToolpath3DViewer } from "./SheetToolpath3DViewer";
+import {
+  calculateSheetToolpath,
+  downloadMach3TapFile,
+  downloadGCodeFile,
+  DEFAULT_TOOLPATH_CONFIG,
+  ToolpathConfig
+} from "../core/toolpath";
 import {
   Layers,
   Download,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Triangle,
   Ruler,
   Printer,
@@ -154,6 +164,9 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
   };
   // Mode: "nesting" (ЧПУ нестінг на листах) | "blueprints" (Креслення трикутників) | "insulation" (Утеплювач & Теплоємність)
   const [viewMode, setViewMode] = useState<"blueprints" | "nesting" | "insulation">("nesting");
+  // Dedicated 3D sheet milling window collapse/expand state
+  const [isSheet3DCollapsed, setIsSheet3DCollapsed] = useState(false);
+  const [isSheetGCodeModalOpen, setIsSheetGCodeModalOpen] = useState(false);
 
   // Selected triangle type for blueprints: "all" or specific (e.g. "A-A-B")
   const [selectedTriangleType, setSelectedTriangleType] = useState<string>("all");
@@ -546,6 +559,35 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
     );
   };
 
+  // Export single sheet G-code program with Autodesk Fusion Mach3 post-processor parameters
+  const handleExportSheetGCode = (ext: "gcode" | "tap" = "gcode") => {
+    const tpConfig: ToolpathConfig = {
+      ...DEFAULT_TOOLPATH_CONFIG,
+      toolDiameterMm: toolDiameter,
+      feedRateMmMin: feedRateMmMin,
+      passes: passes,
+      layer: (nestingMaterialTab === "inner_sheathing" ? "inner" : "outer") as "inner" | "outer",
+      sheetThicknessMm: (activeLayout as any).thickness || 12,
+      holdingTabs: true,
+      tabWidthMm: 12,
+      tabHeightMm: 4,
+      spindleRpm: 18000,
+      safeHeightMm: 15,
+      retractHeightMm: 5,
+      postProcessor: "mach3"
+    };
+    const res = calculateSheetToolpath(activeLayout, safeSheetIndex, tpConfig);
+    const prefix = isViewingInner
+      ? `inner_sheathing_${innerMatConfig.id}_sheet`
+      : isViewingWindows
+      ? "window_sheet"
+      : isViewingSolar
+      ? "solar_sheet"
+      : "sheathing_sheet";
+    const filename = `${prefix}_${safeSheetIndex + 1}_of_${activeLayout.totalSheetsRequired}_mach3`;
+    downloadGCodeFile(res.gcode, filename, ext);
+  };
+
   // Download master DXF containing ALL nesting sheets
   const handleDownloadAllSheetsDXF = () => {
     const dxfContent = generateAllSheathingSheetsDXF(activeLayout);
@@ -759,7 +801,10 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
               }`}
             >
               <Cpu className="w-3.5 h-3.5" />
-              <span>ЧПУ нестінг на листах</span>
+              <span>ЧПУ нестінг (2D карти + 3D фреза)</span>
+              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full ${viewMode === "nesting" ? "bg-white/20 text-white" : "bg-[#FEF3C7] text-[#92400E]"}`}>
+                3D ЧПК
+              </span>
             </button>
 
             <button
@@ -2600,15 +2645,17 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
             )}
           </div>
 
-          {/* CNC Sheet SVG Canvas Container */}
-          <div className="flex flex-col gap-4 p-6 rounded-3xl tactile-card">
+          {/* CNC Sheet Canvas Container: 2D SVG or 3D CNC Toolpath Simulation */}
+          <div className="flex flex-col gap-4 p-4 sm:p-6 rounded-3xl tactile-card">
             {/* Canvas Toolbar */}
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-[#1A2E3B]">
-                  Карта розкрою: Лист #{safeSheetIndex + 1} ({activeLayout.sheetWidth} × {activeLayout.sheetHeight} мм)
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-[#1A2E3B] flex items-center gap-1.5">
+                  <Eye className="w-3.5 h-3.5 text-[#2B6CB0]" />
+                  <span>2D Карта розкрою: Лист #{safeSheetIndex + 1} ({activeLayout.sheetWidth} × {activeLayout.sheetHeight} мм)</span>
                   {isViewingWindows && <span className="ml-2 px-2 py-0.5 rounded-md bg-[#E0F2FE] text-[#0284C7] text-[10px]">Пластик / Скло</span>}
                 </span>
+
                 <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FAF2DE] text-[#B7791F]">
                   Фреза Ø{activeLayout.toolDiameter || toolDiameter} мм · Kerf={activeLayout.toolDiameter || toolDiameter} мм
                 </span>
@@ -2622,7 +2669,7 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                   title="Завантажити цей лист як векторний SVG"
                 >
                   <Download className="w-3 h-3" />
-                  <span>SVG лист</span>
+                  <span>SVG</span>
                 </button>
                 <button
                   onClick={handleExportSheetPDF}
@@ -2630,11 +2677,11 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                   title="Експорт цього листа в PDF A4"
                 >
                   <FileText className="w-3 h-3" />
-                  <span>PDF лист</span>
+                  <span>PDF</span>
                 </button>
                 <button
                   onClick={handleExportAllSheetsPDF}
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg tactile-btn-mint text-[#1A3E26]"
+                  className="hidden sm:flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg tactile-btn-mint text-[#1A3E26]"
                   title="Експорт повного альбому всіх листів в PDF"
                 >
                   <BookOpen className="w-3 h-3" />
@@ -2647,6 +2694,14 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                 >
                   <Cpu className="w-3 h-3 text-[#DE7C5A]" />
                   <span>DXF</span>
+                </button>
+                <button
+                  onClick={() => handleExportSheetGCode("gcode")}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 text-white hover:brightness-110 shadow-xs cursor-pointer"
+                  title="Завантажити керуючу програму у форматі G-code (.gcode) за постпроцесором Mach3"
+                >
+                  <Download className="w-3 h-3 text-emerald-200" />
+                  <span>G-code (Mach3)</span>
                 </button>
 
                 <div className="h-4 w-px bg-[#CBD5E0] mx-1" />
@@ -2678,8 +2733,8 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
               </div>
             </div>
 
-            {/* SVG Visualizer Box */}
-            <div className="w-full rounded-2xl bg-[#FBF9F5] border border-[#DCD6CA] p-4 overflow-auto min-h-[460px] max-h-[780px] flex items-center justify-center shadow-inner">
+            {/* SVG 2D Visualizer Box */}
+            <div className="w-full rounded-2xl bg-[#FBF9F5] border border-[#DCD6CA] p-4 overflow-auto min-h-[440px] max-h-[720px] flex items-center justify-center shadow-inner">
               <div
                 style={{
                   transform: `scale(${zoomScale})`,
@@ -2691,6 +2746,69 @@ export const SheathingNestingPanel: React.FC<SheathingNestingPanelProps> = ({
                 dangerouslySetInnerHTML={{ __html: currentNestingSvg }}
               />
             </div>
+          </div>
+
+          {/* DEDICATED NEW WINDOW: 3D CNC SHEET TOOLPATH MILLING VIEWER (ПІД ВІКНОМ 2D НЕСТІНГУ) */}
+          <div className="flex flex-col gap-4 p-4 sm:p-6 rounded-3xl tactile-card border border-[#E8E2D8] bg-white shadow-md">
+            {/* 3D Window Header Bar */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 border-b border-[#E8E2D8] gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#D97706] to-[#B45309] text-white flex items-center justify-center shrink-0 shadow-2xs">
+                  <Scissors className="w-5 h-5 text-amber-200" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-bold text-[#1A2E3B] flex items-center gap-1.5">
+                      <span>3D Фрезерування ЧПК: Лист #{safeSheetIndex + 1} з {activeLayout.totalSheetsRequired}</span>
+                      <span className="text-[11px] font-mono font-normal text-[#5A6778]">
+                        ({activeLayout.sheetWidth} × {activeLayout.sheetHeight} × {(activeLayout as any).thickness || 12} мм)
+                      </span>
+                    </h3>
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]">
+                      Mach3 / Mach2 Mill
+                    </span>
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FAF2DE] text-[#B7791F]">
+                      Ø{toolDiameter} мм
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#5A6778] mt-0.5">
+                    Інтерактивна 3D симуляція руху фрези по контуру деталей листа з вибором діаметра, проходів та генерацією програми G-коду
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons on 3D Window */}
+              <div className="flex items-center gap-2 flex-wrap self-stretch sm:self-auto justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsSheet3DCollapsed(c => !c)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#FAF7F2] hover:bg-[#F0ECE1] text-[#5A6778] border border-[#DCD6CA] transition-all cursor-pointer"
+                  title={isSheet3DCollapsed ? "Розгорнути 3D вікно симуляції" : "Згорнути 3D вікно"}
+                >
+                  {isSheet3DCollapsed ? <ChevronDown className="w-3.5 h-3.5 text-[#DE7C5A]" /> : <ChevronUp className="w-3.5 h-3.5 text-[#5A6778]" />}
+                  <span>{isSheet3DCollapsed ? "Розгорнути 3D перегляд" : "Згорнути 3D"}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* 3D Sheet Simulation Canvas View */}
+            {!isSheet3DCollapsed && (
+              <SheetToolpath3DViewer
+                model={model}
+                sheetLayout={activeLayout}
+                sheetIndex={safeSheetIndex}
+                totalSheets={activeLayout.totalSheetsRequired}
+                onSelectSheet={setSpecificSheetIndex}
+                toolDiameter={toolDiameter}
+                onChangeToolDiameter={setToolDiameter}
+                feedRateMmMin={feedRateMmMin}
+                onChangeFeedRate={setFeedRateMmMin}
+                passes={passes}
+                onChangePasses={setPasses}
+                materialName={activeLayout.materialName || "Фанера"}
+                isInner={nestingMaterialTab === "inner_sheathing"}
+              />
+            )}
           </div>
 
           {/* DOME GEOMETRY QUICK SELECTOR FOR NESTING OPTIMIZATION (Repeated under cutting map) */}
