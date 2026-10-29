@@ -20,6 +20,13 @@ export interface KumCadInterchangeV1 {
     heightMm: number;
     frequency: number;
   };
+  beamProfile: {
+    type: "rectangular" | "pipe" | "circular";
+    widthMm: number;
+    depthMm: number;
+    diameterMm: number | null;
+    wallThicknessMm: number | null;
+  };
   vertices: Array<{ id: number; position: Vec3 }>;
   struts: Array<{
     id: number;
@@ -105,6 +112,13 @@ export function toKumCadInterchange(model: DomeModel): KumCadInterchangeV1 {
       diameterMm: model.parameters.diameter,
       heightMm: model.parameters.height,
       frequency: model.parameters.frequency,
+    },
+    beamProfile: {
+      type: model.beamProfile.type,
+      widthMm: finiteNonnegative(model.beamProfile.width, "profile width"),
+      depthMm: finiteNonnegative(model.beamProfile.depth, "profile depth"),
+      diameterMm: model.beamProfile.diameter == null ? null : finiteNonnegative(model.beamProfile.diameter, "profile diameter"),
+      wallThicknessMm: model.beamProfile.wallThickness == null ? null : finiteNonnegative(model.beamProfile.wallThickness, "profile wall thickness"),
     },
     vertices,
     struts,
