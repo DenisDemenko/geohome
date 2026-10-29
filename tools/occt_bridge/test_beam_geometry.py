@@ -7,7 +7,7 @@ from pathlib import Path
 
 import cadquery as cq
 
-from geohome_to_step import build_step, load_geometry, _beam_profile, _beam_solid
+from geohome_to_step import build_step, load_geometry, _beam_profile, _beam_solid, _trim_beam_ends
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "triangle.json"
@@ -40,6 +40,42 @@ class BeamSolidTests(unittest.TestCase):
                     self.assertGreater(result.stat().st_size, 100)
                     imported = cq.importers.importStep(str(result))
                     self.assertEqual(len(imported.solids().vals()), len(fixture["struts"]))
+
+    def test_zero_angle_end_setback_gives_exact_length_and_volume(self):
+        fixture = load_geometry(FIXTURE)
+        profile = _beam_profile(fixture, "rectangular", 20, 20, 30, None)
+        start = cq.Vector(0, 0, 0)
+        delta = cq.Vector(0, 0, 100)
+        body = _beam_solid(cq, start, delta, 100, profile)
+        trimmed = _trim_beam_ends(cq, body, start, delta, 100,
+                                  {"id": 1, "cutLengthMm": 80}, profile)
+        self.assertTrue(trimmed.isValid())
+        self.assertAlmostEqual(trimmed.Volume(), 20 * 30 * 80, delta=0.1)
+        self.assertAlmostEqual(trimmed.BoundingBox().zmin, 10, delta=0.01)
+        self.assertAlmostEqual(trimmed.BoundingBox().zmax, 90, delta=0.01)
+
+    def test_miter_and_bevel_create_valid_non_square_end_faces(self):
+        fixture = load_geometry(FIXTURE)
+        profile = _beam_profile(fixture, "rectangular", 20, 20, 30, None)
+        start = cq.Vector(0, 0, 0)
+        delta = cq.Vector(0, 0, 100)
+        body = _beam_solid(cq, start, delta, 100, profile)
+        trimmed = _trim_beam_ends(
+            cq, body, start, delta, 100,
+            {"id": 2, "cutLengthMm": 80, "startMiterDeg": 12,
+             "endMiterDeg": 7, "bevelDeg": 5}, profile
+        )
+        self.assertTrue(trimmed.isValid())
+        self.assertGreater(trimmed.Volume(), 0)
+        self.assertLess(trimmed.Volume(), body.Volume())
+
+    def test_invalid_cut_length_rejected(self):
+        fixture = load_geometry(FIXTURE)
+        profile = _beam_profile(fixture, "square", 20, 20, 20, None)
+        body = _beam_solid(cq, cq.Vector(0, 0, 0), cq.Vector(0, 0, 100), 100, profile)
+        with self.assertRaisesRegex(ValueError, "Cut length cannot exceed"):
+            _trim_beam_ends(cq, body, cq.Vector(0, 0, 0), cq.Vector(0, 0, 100),
+                            100, {"cutLengthMm": 120}, profile)
 
     def test_pipe_wall_validation(self):
         fixture = load_geometry(FIXTURE)
