@@ -1,4 +1,4 @@
-import type { DomeModel, Vec3 } from "../core/types";
+import type { DomeModel, Vec3 } from "../../core/types";
 
 /**
  * GeoHome -> KumCAD interchange contract, version 1.
