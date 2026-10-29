@@ -72,7 +72,7 @@ jobs:
       - name: Install application dependencies
         run: bun install --frozen-lockfile
       - name: Install browser test dependency
-        run: npm install --no-save --package-lock=false playwright
+        run: npm install --no-save --package-lock=false --legacy-peer-deps playwright
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Click CAD export and verify downloaded JSON
