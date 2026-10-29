@@ -1,0 +1,100 @@
+{
+  "schema": "geohome.kumcad.interchange",
+  "version": 1,
+  "units": "mm",
+  "coordinateSystem": "right-handed-z-up",
+  "source": "GeoHome",
+  "dome": {
+    "diameterMm": 2000,
+    "heightMm": 1000,
+    "frequency": 1
+  },
+  "vertices": [
+    {
+      "id": 0,
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 1000
+      }
+    },
+    {
+      "id": 1,
+      "position": {
+        "x": 500,
+        "y": 0,
+        "z": 0
+      }
+    },
+    {
+      "id": 2,
+      "position": {
+        "x": -500,
+        "y": 0,
+        "z": 0
+      }
+    }
+  ],
+  "struts": [
+    {
+      "id": 0,
+      "startVertexId": 0,
+      "endVertexId": 1,
+      "nominalLengthMm": 1118.034,
+      "cutLengthMm": null,
+      "profileType": "A"
+    },
+    {
+      "id": 1,
+      "startVertexId": 0,
+      "endVertexId": 2,
+      "nominalLengthMm": 1118.034,
+      "cutLengthMm": null,
+      "profileType": "A"
+    },
+    {
+      "id": 2,
+      "startVertexId": 1,
+      "endVertexId": 2,
+      "nominalLengthMm": 1000,
+      "cutLengthMm": null,
+      "profileType": "B"
+    }
+  ],
+  "triangles": [
+    {
+      "id": 0,
+      "vertexIds": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "connectors": [
+    {
+      "vertexId": 0,
+      "beamIds": [
+        0,
+        1
+      ],
+      "boundary": false
+    },
+    {
+      "vertexId": 1,
+      "beamIds": [
+        0,
+        2
+      ],
+      "boundary": true
+    },
+    {
+      "vertexId": 2,
+      "beamIds": [
+        1,
+        2
+      ],
+      "boundary": true
+    }
+  ]
+}

@@ -18,6 +18,7 @@ import {
 import { exportDomeOBJ } from "../export/objExport";
 import { exportDomeSTEP } from "../export/stepExport";
 import { exportDomeSTL } from "../export/stlExport";
+import { serializeKumCadInterchange } from "../integrations/kumcad/interchange";
 import { downloadUSDZ } from "../export/usdzExport";
 import { ARModal } from "./ARModal";
 import {
@@ -88,6 +89,17 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   const [isARModalOpen, setIsARModalOpen] = useState(false);
   const activeNodeId = selectedNodeId !== null ? selectedNodeId : model.nodes[0]?.id || 0;
   const activeNode = model.nodes.find(n => n.id === activeNodeId) || model.nodes[0];
+
+  const [kumcadError, setKumcadError] = useState<string | null>(null);
+  const handleExportKumCadJSON = () => {
+    try {
+      setKumcadError(null);
+      const json = serializeKumCadInterchange(model);
+      downloadFile(`geohome_${model.parameters.frequency}V_kumcad_v1.json`, json, "application/json");
+    } catch (error) {
+      setKumcadError(error instanceof Error ? error.message : "Не вдалося експортувати CAD-дані");
+    }
+  };
 
   // Connector 3D Export State & Handlers
   const connectorTypes = classifyConnectorTypes(model, model.connectorParams);
@@ -1409,6 +1421,31 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
             </div>
           ))}
         </div>
+      </div>
+
+      {/* KumCAD interchange (native OpenCASCADE import is an optional local tool) */}
+      <div className="p-4 rounded-2xl tactile-card-mint border border-[#A6C7AE]/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#E1EDE3] text-[#1A3E26]">
+            <FileCode className="w-5 h-5 text-[#2E7D32]" />
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-[#1A2E3B]">KumCAD / OpenCASCADE — CAD JSON</h4>
+            <p className="text-[11px] text-[#5A6778]">
+              Геометрія купола, балки та вузли у міліметрах для локального CAD-конвертера (не власний формат KumCAD)
+            </p>
+            {kumcadError && (
+              <p className="text-[11px] text-red-600 mt-1 font-medium">{kumcadError}</p>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleExportKumCadJSON}
+          className="px-4 py-2 text-xs font-bold rounded-xl tactile-btn text-[#2E7D32] hover:bg-[#E1EDE3] whitespace-nowrap cursor-pointer"
+        >
+          Завантажити CAD JSON
+        </button>
       </div>
 
       {/* BOM Specification */}
