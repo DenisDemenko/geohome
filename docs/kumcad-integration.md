@@ -122,3 +122,34 @@ Therefore this is geometric cut-plane support, not verified fabrication
 instructions. Before CNC manufacturing, define the local frame for each node,
 calculate exact face/connector intersections, validate material allowances, and
 run physical calibration tests.
+
+
+## Phase 4 — validation on main baseline, browser export, and connector prototype
+
+This branch (`feat/kumcad-connectors-validation`) starts from the main-branch
+integration commit `4281251`. CI now runs:
+
+- TypeScript checks, interchange tests, Vite production build.
+- A headless Chromium smoke test: open GeoHome, select CAD/CAM export,
+  download CAD JSON, parse it and validate the schema and nonempty model.
+- OpenCASCADE beam STEP export/re-import.
+- A second STEP export of experimental connector bodies, including 3D
+  spherical central hubs, radially oriented outer sleeves, and hollow bores.
+  Tests validate positive volume, valid solids, and constraints on bore sizes.
+
+Connector export command:
+
+```bash
+python tools/occt_bridge/geohome_to_step.py dome.json beams.step \
+  --connectors-step connectors.step \
+  --hub-diameter-mm 50 --socket-outer-mm 30 \
+  --socket-inner-mm 20 --socket-length-mm 45
+```
+
+**Scope warning:** This connector design is a geometric prototype only. It
+does not model fastener holes, load paths, wall-to-hub stresses, print
+tolerances or exact beam-to-hub contact; no fabrication safety is implied.
+The STEP export has been re-imported with CadQuery/OpenCASCADE, **not with
+KumCAD itself**. A native KumCAD desktop import test remains outstanding.
+The workflow is configured to cover `main` after this CI configuration is
+merged; current verification is on a branch descended from `main`.
