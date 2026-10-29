@@ -69,3 +69,33 @@ are not implemented in this converter.
 Tests/builds have not yet been executed in CI for this branch. The script is
 not invoked by the web app and requires a local Python environment.
 A direct KumCAD import path/API remains to be investigated separately.
+
+
+## Phase 3.1 — actual beam cross-sections
+
+The exported CAD interchange now includes `beamProfile` from GeoHome
+(type, width, depth, diameter and wall thickness in millimetres). The
+OpenCASCADE/CadQuery adapter constructs four cross-section types:
+
+- `circular`: solid round beam.
+- `pipe`: hollow circular pipe with checked positive wall thickness.
+- `rectangular`: solid width-by-depth timber/metal bar.
+- `square`: equal-width solid square bar (CLI override).
+
+Example:
+
+```bash
+python tools/occt_bridge/geohome_to_step.py dome.json dome.step
+python tools/occt_bridge/geohome_to_step.py dome.json pipes.step --profile pipe --strut-diameter-mm 40 --wall-mm 3
+python tools/occt_bridge/geohome_to_step.py dome.json timber.step --profile rectangular --width-mm 50 --depth-mm 100
+```
+
+CI executes a geometry test suite covering section volume, STEP writing,
+STEP re-import, and pipe thickness validation, alongside web lint/build/tests.
+`--strut-diameter-mm` is the legacy fallback; without `--profile`,
+GeoHome's embedded section type and dimensions take precedence.
+
+**Not yet implemented:** precise mitre/bevel cuts, cut-length/hub setbacks,
+individual connector bodies, solid naming in assemblies, material metadata,
+or a direct KumCAD runtime connection. Resulting CAD is suitable for
+interchange/visual checks, not yet for manufacturing.
