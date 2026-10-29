@@ -2,7 +2,7 @@
 """Experimental GeoHome CAD JSON -> OpenCASCADE STEP strut solids.
 
 Uses CadQuery (an OCCT/OpenCASCADE wrapper), not KumCAD's GUI.
-For visualization and CAD interchange only; NOT verified structural geometry.
+Supports circular solid, hollow pipe and rectangular/square extruded solids.\nFor visualization and CAD interchange only; mitres and structural joints are NOT modeled.
 """
 from __future__ import annotations
 
@@ -41,9 +41,67 @@ def load_geometry(path: Path) -> dict:
     return data
 
 
-def build_step(data: dict, output: Path, diameter_mm: float) -> int:
-    if not 0 < diameter_mm <= 1000 or not math.isfinite(diameter_mm):
-        raise ValueError("Strut diameter must be within (0, 1000] mm")
+def _positive(value: float, label: str) -> float:
+    if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{label} must be a positive finite number")
+    return float(value)
+
+
+def _beam_profile(data: dict, override: str | None, diameter_mm: float,
+                  width_mm: float | None, depth_mm: float | None,
+                  wall_mm: float | None) -> dict:
+    """Use GeoHome beam dimensions unless explicitly overridden at the CLI."""
+    original = data.get("beamProfile", {})
+    kind = override or original.get("type", "circular")
+    if kind not in ("circular", "pipe", "rectangular", "square"):
+        raise ValueError(f"Unsupported beam profile: {kind}")
+    width = _positive(width_mm if width_mm is not None else original.get("widthMm", diameter_mm), "width")
+    depth = _positive(depth_mm if depth_mm is not None else original.get("depthMm", width), "depth")
+    diameter = _positive(
+        diameter_mm if override and kind in ("pipe", "circular") else
+        original.get("diameterMm") or original.get("widthMm") or diameter_mm,
+        "diameter",
+    )
+    wall = wall_mm if wall_mm is not None else original.get("wallThicknessMm")
+    if kind == "pipe":
+        wall = _positive(wall if wall is not None else 2, "wall thickness")
+        if 2 * wall >= diameter:
+            raise ValueError("Pipe wall thickness must be smaller than its radius")
+    elif wall is not None and wall <= 0:
+        raise ValueError("Wall thickness must be positive")
+    for label, value in (("width", width), ("depth", depth), ("diameter", diameter)):
+        if value > 1000:
+            raise ValueError(f"{label} exceeds the prototype 1000 mm limit")
+    return {"kind": kind, "width": width, "depth": depth, "diameter": diameter, "wall": wall}
+
+
+def _beam_solid(cq, start, delta, length_mm: float, profile: dict):
+    direction = delta.normalized()
+    kind = profile["kind"]
+    if kind == "circular":
+        return cq.Solid.makeCylinder(profile["diameter"] / 2, length_mm, start, direction)
+    if kind == "pipe":
+        # Annular sketch extruded along the beam axis. Open ends remain hollow.
+        plane = cq.Plane(origin=start, normal=direction)
+        return (cq.Workplane(plane)
+                .circle(profile["diameter"] / 2)
+                .circle(profile["diameter"] / 2 - profile["wall"])
+                .extrude(length_mm).val())
+
+    # Stable perpendicular local axes even for near-vertical struts.
+    z_axis = cq.Vector(0, 0, 1)
+    reference = cq.Vector(0, 1, 0) if abs(direction.dot(z_axis)) > 0.95 else z_axis
+    x_axis = reference.cross(direction).normalized()
+    plane = cq.Plane(origin=start, xDir=x_axis, normal=direction)
+    dimension = profile["width"]
+    other = dimension if kind == "square" else profile["depth"]
+    return cq.Workplane(plane).rect(dimension, other).extrude(length_mm).val()
+
+
+def build_step(data: dict, output: Path, diameter_mm: float = 20.0,
+               profile_type: str | None = None, width_mm: float | None = None,
+               depth_mm: float | None = None, wall_mm: float | None = None) -> int:
+    profile = _beam_profile(data, profile_type, diameter_mm, width_mm, depth_mm, wall_mm)
     try:
         import cadquery as cq
     except ImportError as exc:
@@ -58,9 +116,7 @@ def build_step(data: dict, output: Path, diameter_mm: float) -> int:
         actual_length = delta.Length
         if not math.isfinite(actual_length) or actual_length <= 0.001:
             raise ValueError(f"Strut {edge.get('id')} has zero or invalid length")
-        # The first prototype creates circular solids; beam profile and joints
-        # are intentionally NOT assumed manufacturable.
-        solids.append(cq.Solid.makeCylinder(diameter_mm / 2, actual_length, start, delta.normalized()))
+        solids.append(_beam_solid(cq, start, delta, actual_length, profile))
     if not solids:
         raise ValueError("No struts to export")
     model = cq.Compound.makeCompound(solids)
@@ -72,7 +128,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="GeoHome CAD JSON to OCCT STEP")
     parser.add_argument("input", type=Path, help="CAD JSON exported by GeoHome")
     parser.add_argument("output", type=Path, help="Output STEP file (.step/.stp)")
-    parser.add_argument("--strut-diameter-mm", type=float, default=20.0)
+    parser.add_argument("--strut-diameter-mm", type=float, default=20.0, help="Fallback diameter for legacy interchange")
+    parser.add_argument("--profile", choices=("circular", "pipe", "square", "rectangular"), help="Override GeoHome beam type")
+    parser.add_argument("--width-mm", type=float)
+    parser.add_argument("--depth-mm", type=float)
+    parser.add_argument("--wall-mm", type=float)
     args = parser.parse_args()
 
     if args.output.suffix.lower() not in (".step", ".stp"):
@@ -80,7 +140,7 @@ def main() -> None:
     if args.input.resolve() == args.output.resolve():
         parser.error("Input and output must differ")
     data = load_geometry(args.input)
-    count = build_step(data, args.output, args.strut_diameter_mm)
+    count = build_step(data, args.output, args.strut_diameter_mm, args.profile, args.width_mm, args.depth_mm, args.wall_mm)
     print(f"Exported {count} strut solids to {args.output}")
 
 
