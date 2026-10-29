@@ -34,6 +34,10 @@ export interface KumCadInterchangeV1 {
     endVertexId: number;
     nominalLengthMm: number;
     cutLengthMm: number | null;
+    startMiterDeg: number | null;
+    endMiterDeg: number | null;
+    bevelDeg: number | null;
+    hubSetbackMm: number | null;
     profileType: string;
   }>;
   triangles: Array<{ id: number; vertexIds: [number, number, number] }>;
@@ -83,6 +87,10 @@ export function toKumCadInterchange(model: DomeModel): KumCadInterchangeV1 {
       endVertexId: edge.end,
       nominalLengthMm: finiteNonnegative(edge.length, `edge ${edge.id} length`),
       cutLengthMm: edge.cutLength == null ? null : finiteNonnegative(edge.cutLength, `edge ${edge.id} cut length`),
+      startMiterDeg: edge.startMiterDeg == null ? null : finiteNonnegative(edge.startMiterDeg, `edge ${edge.id} start miter`),
+      endMiterDeg: edge.endMiterDeg == null ? null : finiteNonnegative(edge.endMiterDeg, `edge ${edge.id} end miter`),
+      bevelDeg: edge.bevelDeg == null ? null : finiteNonnegative(edge.bevelDeg, `edge ${edge.id} bevel`),
+      hubSetbackMm: edge.hubSetback == null ? null : finiteNonnegative(edge.hubSetback, `edge ${edge.id} hub setback`),
       profileType: edge.type,
     };
   });
