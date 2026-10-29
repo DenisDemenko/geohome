@@ -30,7 +30,7 @@ def create_connector_solids(data: dict, hub_diameter_mm: float = 50,
     if hub_diameter_mm < socket_outer_mm:
         raise ValueError("Hub diameter must be at least the socket outer diameter")
 
-    points = {v["id"]: cq.Vector(**v["position"]) for v in data["vertices"]}
+    points = {v["id"]: cq.Vector(v["position"]["x"], v["position"]["y"], v["position"]["z"]) for v in data["vertices"]}
     edges = {e["id"]: e for e in data["struts"]}
     outputs = []
     for node in data["connectors"]:
