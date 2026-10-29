@@ -45,3 +45,27 @@ const file = new Blob([payload], { type: "application/json" });
 No submodule, compiled binary, remote process execution, server route, or deployment
 has been introduced. Existing DXF/STEP/STL exporters and the main branch are untouched.
 This contract is **not** yet a native KumCAD file format or an established KumCAD API.
+
+
+## Phase 2 — working UI and experimental OCCT bridge
+
+- GeoHome's **Export** panel now includes **Завантажити CAD JSON**.
+- `npm run test:cad` runs the TypeScript interchange tests through the existing
+  `tsx` development dependency.
+- `tools/occt_bridge/geohome_to_step.py` is an opt-in, local Python/CadQuery
+  converter, which produces STEP cylinders following each GeoHome beam centreline.
+- Example local setup (Python/CadQuery environment required):
+
+```bash
+python -m pip install cadquery
+python tools/occt_bridge/geohome_to_step.py dome.json dome.step --strut-diameter-mm 20
+```
+
+CadQuery contains an OpenCASCADE geometry kernel. The result is a simple
+**visual CAD handoff**, not a precise timber/steel profile or fabrication-ready
+assembly; connector solids, mitres, cutting allowances and structural validation
+are not implemented in this converter.
+
+Tests/builds have not yet been executed in CI for this branch. The script is
+not invoked by the web app and requires a local Python environment.
+A direct KumCAD import path/API remains to be investigated separately.
