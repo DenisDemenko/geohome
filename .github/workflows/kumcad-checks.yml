@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - feat/kumcad-integration
+      - feat/kumcad-connectors-validation
+      - main
     paths:
       - "src/**"
       - "package.json"
@@ -43,6 +45,12 @@ jobs:
         run: python -m pip install cadquery
       - name: Generate STEP smoke fixture
         run: python tools/occt_bridge/geohome_to_step.py tools/occt_bridge/fixtures/triangle.json /tmp/geohome-smoke.step --strut-diameter-mm 20
+      - name: Generate connector STEP smoke fixture
+        run: python tools/occt_bridge/geohome_to_step.py tools/occt_bridge/fixtures/triangle.json /tmp/geohome-beams.step --connectors-step /tmp/geohome-connectors.step
+      - name: Verify connector STEP
+        run: |
+          test -s /tmp/geohome-connectors.step
+          python -c "import cadquery as cq; assert len(cq.importers.importStep('/tmp/geohome-connectors.step').solids().vals()) == 3"
       - name: Verify STEP file
         run: |
           test -s /tmp/geohome-smoke.step
@@ -50,3 +58,22 @@ jobs:
       - name: Validate beam profiles and STEP roundtrips
         run: python -m unittest discover -s tools/occt_bridge -p "test_*.py" -v
 
+
+  browser-export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install application dependencies
+        run: bun install --frozen-lockfile
+      - name: Install browser test dependency
+        run: npm install --no-save --package-lock=false --legacy-peer-deps playwright
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Click CAD export and verify downloaded JSON
+        run: node tools/occt_bridge/test_browser_export.mjs

@@ -189,6 +189,11 @@ def main() -> None:
     parser.add_argument("--width-mm", type=float)
     parser.add_argument("--depth-mm", type=float)
     parser.add_argument("--wall-mm", type=float)
+    parser.add_argument("--connectors-step", type=Path, help="Optional second STEP file with hub/socket connector prototypes")
+    parser.add_argument("--hub-diameter-mm", type=float, default=50)
+    parser.add_argument("--socket-outer-mm", type=float, default=30)
+    parser.add_argument("--socket-inner-mm", type=float, default=20)
+    parser.add_argument("--socket-length-mm", type=float, default=45)
     args = parser.parse_args()
 
     if args.output.suffix.lower() not in (".step", ".stp"):
@@ -198,6 +203,22 @@ def main() -> None:
     data = load_geometry(args.input)
     count = build_step(data, args.output, args.strut_diameter_mm, args.profile, args.width_mm, args.depth_mm, args.wall_mm)
     print(f"Exported {count} strut solids to {args.output}")
+    if args.connectors_step is not None:
+        if args.connectors_step.suffix.lower() not in (".step", ".stp"):
+            parser.error("Connector output must end with .step or .stp")
+        if args.connectors_step.resolve() in (args.input.resolve(), args.output.resolve()):
+            parser.error("Connector output must be separate from input and beam STEP")
+        import cadquery as cq
+        from connectors import create_connector_solids
+        solids = create_connector_solids(
+            data, args.hub_diameter_mm, args.socket_outer_mm,
+            args.socket_inner_mm, args.socket_length_mm
+        )
+        if not solids:
+            raise ValueError("No connectors to export")
+        cq.exporters.export(cq.Compound.makeCompound(solids),
+                            str(args.connectors_step), exportType="STEP")
+        print(f"Exported {len(solids)} connector prototypes to {args.connectors_step}")
 
 
 if __name__ == "__main__":
