@@ -58,3 +58,22 @@ jobs:
       - name: Validate beam profiles and STEP roundtrips
         run: python -m unittest discover -s tools/occt_bridge -p "test_*.py" -v
 
+
+  browser-export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install application dependencies
+        run: bun install --frozen-lockfile
+      - name: Install browser test dependency
+        run: npm install --no-save --package-lock=false playwright
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Click CAD export and verify downloaded JSON
+        run: node tools/occt_bridge/test_browser_export.mjs
