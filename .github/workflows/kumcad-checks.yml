@@ -39,3 +39,12 @@ jobs:
           python-version: "3.11"
       - name: Python syntax check
         run: python -m py_compile tools/occt_bridge/geohome_to_step.py
+      - name: Install OpenCASCADE Python wrapper
+        run: python -m pip install cadquery
+      - name: Generate STEP smoke fixture
+        run: python tools/occt_bridge/geohome_to_step.py tools/occt_bridge/fixtures/triangle.json /tmp/geohome-smoke.step --strut-diameter-mm 20
+      - name: Verify STEP file
+        run: |
+          test -s /tmp/geohome-smoke.step
+          python -c "from pathlib import Path; p=Path('/tmp/geohome-smoke.step'); assert 'ISO-10303-21' in p.read_text(errors='replace')[:200]"
+
