@@ -2669,6 +2669,117 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         opacity: 0.65
       });
 
+      // 1. Precalculate area-weighted outward unit normals for all nodes.
+      // Anchoring sheathing offsets to shared node normals guarantees adjacent panels meet flush along struts
+      // without dihedral tears or wedge gaps, even when node tiers are leveled horizontally.
+      const nodeNormals = new Map<number, THREE.Vector3>();
+      for (const face of model.faces) {
+        const pA = model.nodes[face.a]?.position;
+        const pB = model.nodes[face.b]?.position;
+        const pC = model.nodes[face.c]?.position;
+        if (!pA || !pB || !pC) continue;
+
+        const fvA = new THREE.Vector3(pA.x, pA.y, pA.z);
+        const fvB = new THREE.Vector3(pB.x, pB.y, pB.z);
+        const fvC = new THREE.Vector3(pC.x, pC.y, pC.z);
+        const feAB = new THREE.Vector3().subVectors(fvB, fvA);
+        const feAC = new THREE.Vector3().subVectors(fvC, fvA);
+        const cross = new THREE.Vector3().crossVectors(feAB, feAC);
+        const fCen = new THREE.Vector3().add(fvA).add(fvB).add(fvC).multiplyScalar(1 / 3);
+        if (cross.dot(fCen) < 0) {
+          cross.negate();
+        }
+
+        for (const nid of [face.a, face.b, face.c]) {
+          let acc = nodeNormals.get(nid);
+          if (!acc) {
+            acc = new THREE.Vector3();
+            nodeNormals.set(nid, acc);
+          }
+          acc.add(cross);
+        }
+      }
+
+      for (const [nid, norm] of nodeNormals.entries()) {
+        if (norm.lengthSq() > 1e-6) {
+          norm.normalize();
+        } else {
+          const pos = model.nodes[nid]?.position;
+          if (pos) {
+            norm.set(pos.x, pos.y, Math.max(1, pos.z)).normalize();
+          } else {
+            norm.set(0, 0, 1);
+          }
+        }
+      }
+
+      /**
+       * Calculates mitered 3D vertices for sheathing triangles with true uniform-width seam gaps:
+       * 1) Extrudes vertices along node normals so adjacent faces meet flush above struts (no dihedral tears).
+       * 2) Insets edges inward perpendicularly by (gapMm / 2) so the gap along every strut is strictly uniform.
+       */
+      const calculateMiteredFaceVertices = (
+        vA: THREE.Vector3,
+        vB: THREE.Vector3,
+        vC: THREE.Vector3,
+        normA: THREE.Vector3,
+        normB: THREE.Vector3,
+        normC: THREE.Vector3,
+        fNorm: THREE.Vector3,
+        offsetDist: number,
+        gapWidthMm: number
+      ): { pA: THREE.Vector3; pB: THREE.Vector3; pC: THREE.Vector3 } => {
+        // Project along node normals to the face plane at offsetDist
+        const dotA = Math.max(0.35, fNorm.dot(normA));
+        const dotB = Math.max(0.35, fNorm.dot(normB));
+        const dotC = Math.max(0.35, fNorm.dot(normC));
+
+        const vPrimeA = vA.clone().addScaledVector(normA, offsetDist / dotA);
+        const vPrimeB = vB.clone().addScaledVector(normB, offsetDist / dotB);
+        const vPrimeC = vC.clone().addScaledVector(normC, offsetDist / dotC);
+
+        const halfGap = Math.max(0, gapWidthMm) * 0.5;
+        if (halfGap <= 0.001) {
+          return { pA: vPrimeA, pB: vPrimeB, pC: vPrimeC };
+        }
+
+        // Exact perpendicular edge inward offsets in the triangle plane
+        const eAB = new THREE.Vector3().subVectors(vPrimeB, vPrimeA).normalize();
+        const eBC = new THREE.Vector3().subVectors(vPrimeC, vPrimeB).normalize();
+        const eCA = new THREE.Vector3().subVectors(vPrimeA, vPrimeC).normalize();
+
+        let uAB = new THREE.Vector3().crossVectors(fNorm, eAB).normalize();
+        let uBC = new THREE.Vector3().crossVectors(fNorm, eBC).normalize();
+        let uCA = new THREE.Vector3().crossVectors(fNorm, eCA).normalize();
+
+        if (uAB.dot(new THREE.Vector3().subVectors(vPrimeC, vPrimeA)) < 0) uAB.negate();
+        if (uBC.dot(new THREE.Vector3().subVectors(vPrimeA, vPrimeB)) < 0) uBC.negate();
+        if (uCA.dot(new THREE.Vector3().subVectors(vPrimeB, vPrimeC)) < 0) uCA.negate();
+
+        // Corner A bisector
+        const bA = new THREE.Vector3().addVectors(uCA, uAB);
+        const denA = Math.max(0.01, bA.dot(uAB));
+        const maxShiftA = 0.45 * Math.min(vPrimeA.distanceTo(vPrimeB), vPrimeA.distanceTo(vPrimeC));
+        const distA = Math.min(halfGap / denA, maxShiftA);
+        const pA = vPrimeA.clone().addScaledVector(bA, distA);
+
+        // Corner B bisector
+        const bB = new THREE.Vector3().addVectors(uAB, uBC);
+        const denB = Math.max(0.01, bB.dot(uBC));
+        const maxShiftB = 0.45 * Math.min(vPrimeB.distanceTo(vPrimeA), vPrimeB.distanceTo(vPrimeC));
+        const distB = Math.min(halfGap / denB, maxShiftB);
+        const pB = vPrimeB.clone().addScaledVector(bB, distB);
+
+        // Corner C bisector
+        const bC = new THREE.Vector3().addVectors(uBC, uCA);
+        const denC = Math.max(0.01, bC.dot(uCA));
+        const maxShiftC = 0.45 * Math.min(vPrimeC.distanceTo(vPrimeB), vPrimeC.distanceTo(vPrimeA));
+        const distC = Math.min(halfGap / denC, maxShiftC);
+        const pC = vPrimeC.clone().addScaledVector(bC, distC);
+
+        return { pA, pB, pC };
+      };
+
       for (const face of model.faces) {
         if (assemblyState.isActive && !assemblyVisibility.visibleFaceIds.has(face.id)) {
           continue;
@@ -3059,20 +3170,20 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         }
 
         // 2. Volumetric Outer Sheathing Panel (added to outerSheathingGroup)
-        const gapMm = Math.max(0, Math.min(10, seamGapMm));
-        let shrinkFactor = 1.0;
-        if (gapMm > 0.001 && !isGlass) {
-          // Precise inradius calculation: r = 2 * Area / Perimeter
-          const area = 0.5 * edgeAB.clone().cross(edgeAC).length();
-          const perim = vA.distanceTo(vB) + vB.distanceTo(vC) + vC.distanceTo(vA);
-          const inradius = perim > 0.01 ? (2 * area) / perim : Math.max(1, avgSide * 0.2887);
-          // Each panel edge retreats towards centroid by half of the total seam gap (gapMm / 2)
-          shrinkFactor = Math.max(0.70, Math.min(1.0, 1 - (gapMm * 0.5) / Math.max(1, inradius)));
-        }
+        // Mitered node alignment ensures adjacent panels meet flush with zero dihedral tears,
+        // and true perpendicular edge insets create a strictly uniform seam gap along every strut.
+        const normA = nodeNormals.get(face.a) || faceNormal;
+        const normB = nodeNormals.get(face.b) || faceNormal;
+        const normC = nodeNormals.get(face.c) || faceNormal;
 
-        const pA = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vA, pCen), shrinkFactor).addScaledVector(faceNormal, outwardOffset);
-        const pB = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vB, pCen), shrinkFactor).addScaledVector(faceNormal, outwardOffset);
-        const pC = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vC, pCen), shrinkFactor).addScaledVector(faceNormal, outwardOffset);
+        const gapMm = Math.max(0, Math.min(10, seamGapMm));
+        const { pA, pB, pC } = calculateMiteredFaceVertices(
+          vA, vB, vC,
+          normA, normB, normC,
+          faceNormal,
+          outwardOffset,
+          isGlass ? 0 : gapMm
+        );
 
         const panelThick = Math.max(0.5, plywoodThickness);
         const pA_in = pA;
@@ -3232,19 +3343,17 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
         }
 
         // 3. Inner Sheathing (Interior lining: drywall, chipboard, OSB, plywood on inside face of struts)
+        // Mitered interior geometry ensures tight flush joints along strut inner edges with uniform seam gaps.
         if (!isGlass) {
           const inwardOffset = -((effBeamDepth / 2) + 1.2);
           const inGapMm = Math.max(0, Math.min(10, innerSheathingParams?.seamGapMm ?? seamGapMm));
-          let inShrink = 1.0;
-          if (inGapMm > 0.001) {
-            const area = 0.5 * edgeAB.clone().cross(edgeAC).length();
-            const perim = vA.distanceTo(vB) + vB.distanceTo(vC) + vC.distanceTo(vA);
-            const inradius = perim > 0.01 ? (2 * area) / perim : Math.max(1, avgSide * 0.2887);
-            inShrink = Math.max(0.70, Math.min(1.0, 1 - (inGapMm * 0.5) / Math.max(1, inradius)));
-          }
-          const ipA = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vA, pCen), inShrink).addScaledVector(faceNormal, inwardOffset);
-          const ipB = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vB, pCen), inShrink).addScaledVector(faceNormal, inwardOffset);
-          const ipC = pCen.clone().addScaledVector(new THREE.Vector3().subVectors(vC, pCen), inShrink).addScaledVector(faceNormal, inwardOffset);
+          const { pA: ipA, pB: ipB, pC: ipC } = calculateMiteredFaceVertices(
+            vA, vB, vC,
+            normA, normB, normC,
+            faceNormal,
+            inwardOffset,
+            inGapMm
+          );
 
           const innerGeom = new THREE.BufferGeometry().setFromPoints([ipA, ipC, ipB]);
           innerGeom.computeVertexNormals();
@@ -4423,6 +4532,19 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
             {showOuterSheathing && (
               <span className="hidden md:inline px-1.5 py-0.5 text-[10px] font-mono font-bold bg-[#EFE8DD] text-[#7A4E21] rounded-md">
                 {plywoodThickness} мм
+              </span>
+            )}
+            {showOuterSheathing && (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const nextGap = seamGapMm === 0 ? 2 : seamGapMm === 2 ? 3 : seamGapMm === 3 ? 5 : 0;
+                  handleSeamGapChange(nextGap);
+                }}
+                className="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-[#FAF0E6] text-[#DE7C5A] hover:bg-[#FDE8D8] border border-[#FDBA74]/50 rounded-md transition-all cursor-pointer"
+                title="Шов між листами: натисніть для швидкого перемикання (0 мм встик -> 2 мм -> 3 мм -> 5 мм)"
+              >
+                шов: {seamGapMm === 0 ? "0 мм" : `${seamGapMm} мм`}
               </span>
             )}
           </button>
@@ -6099,7 +6221,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
               <div className="flex items-center gap-2 flex-wrap">
                 <div className="flex items-center gap-1.5 font-bold text-[#8B5E34]">
                   <Triangle className="w-3.5 h-3.5 text-[#DE7C5A]" />
-                  <span>Зазор між трикутниками:</span>
+                  <span>Рівномірний шов між листами:</span>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -6111,7 +6233,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                     value={seamGapMm}
                     onChange={e => handleSeamGapChange(parseFloat(e.target.value) || 0)}
                     className="w-24 sm:w-36 h-2 rounded-lg bg-[#E8E2D8] accent-[#DE7C5A] cursor-pointer"
-                    title="Зазор між трикутниками обшивки від 0 до 10 мм"
+                    title="Регулювання ширини шва між листами обшивки від 0 до 10 мм"
                   />
                   <span className="font-mono font-bold text-xs text-[#DE7C5A] bg-white px-2 py-0.5 rounded-lg border border-[#DCD6CA] min-w-[55px] text-center">
                     {seamGapMm === 0 ? "0 мм (встик)" : `${seamGapMm} мм`}
@@ -6120,7 +6242,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
 
                 {/* Quick gap presets */}
                 <div className="flex items-center gap-1">
-                  {[0, 2, 3, 5, 10].map(gap => (
+                  {[0, 1, 2, 3, 5, 8, 10].map(gap => (
                     <button
                       key={gap}
                       type="button"
@@ -6130,7 +6252,7 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                           ? "bg-[#DE7C5A] text-white font-bold shadow-2xs"
                           : "bg-white/80 hover:bg-white text-[#5A6778] border border-[#E8E2D8]"
                       }`}
-                      title={gap === 0 ? "Встановити зазор 0 мм (панелі встик)" : `Встановити зазор ${gap} мм`}
+                      title={gap === 0 ? "0 мм (встик без зазору)" : `Встановити зазор ${gap} мм`}
                     >
                       {gap === 0 ? "0 мм" : `${gap} мм`}
                     </button>
@@ -6138,8 +6260,8 @@ export const Viewer3D: React.FC<Viewer3DProps> = ({
                 </div>
               </div>
 
-              <span className="text-[10px] text-[#8C9BAE] hidden md:inline italic">
-                {seamGapMm === 0 ? "Панелі щільно з'єднані без зазору" : `Компенсаційний шов ${seamGapMm} мм між суміжними панелями`}
+              <span className="text-[10px] text-[#5B9279] font-medium hidden md:inline">
+                {seamGapMm === 0 ? "✓ Встик: панелі щільно зістиковані без розривів на кутах" : `✓ Рівномірний паралельний шов ${seamGapMm} мм вздовж усіх ребер`}
               </span>
             </div>
           </div>

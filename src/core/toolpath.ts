@@ -15,6 +15,10 @@ export interface ToolpathConfig {
   tabHeightMm: number; // tab thickness from bottom, e.g. 4mm
   postProcessor: "mach3" | "mach2";
   layer: "outer" | "inner";
+  enableEngraving: boolean; // Auto-engrave part ID and type label on each triangle
+  engravingDepthMm: number; // Depth for part ID engraving, e.g. 0.8 mm
+  engravingFeedRateMmMin: number; // Feedrate during engraving, e.g. 1800 mm/min
+  engravingTextHeightMm: number; // Text height for part ID, e.g. 22 mm
 }
 
 export const DEFAULT_TOOLPATH_CONFIG: ToolpathConfig = {
@@ -30,10 +34,14 @@ export const DEFAULT_TOOLPATH_CONFIG: ToolpathConfig = {
   tabWidthMm: 12,
   tabHeightMm: 4,
   postProcessor: "mach3",
-  layer: "outer"
+  layer: "outer",
+  enableEngraving: true,
+  engravingDepthMm: 0.8,
+  engravingFeedRateMmMin: 1800,
+  engravingTextHeightMm: 22
 };
 
-export type ToolpathMotionType = "rapid" | "plunge" | "cut" | "tab" | "retract";
+export type ToolpathMotionType = "rapid" | "plunge" | "cut" | "tab" | "retract" | "engrave";
 
 export interface Point3D {
   x: number;
@@ -63,6 +71,7 @@ export interface TriangleToolpath {
   totalLengthMm: number;
   cutLengthMm: number;
   rapidLengthMm: number;
+  engraveLengthMm: number;
   estimatedTimeSec: number;
   gcode: string;
 }
@@ -81,6 +90,7 @@ export interface DomeToolpathResult {
     estimatedTimeMinutes: number;
     cutLengthMeters: number;
     rapidLengthMeters: number;
+    engraveLengthMeters: number;
   };
 }
 
@@ -104,7 +114,158 @@ export interface SheetToolpathResult {
     estimatedTimeMinutes: number;
     cutLengthMeters: number;
     rapidLengthMeters: number;
+    engraveLengthMeters: number;
   };
+}
+
+/**
+ * Single-stroke vector stick font (Hershey style) for CNC engraving.
+ * Each glyph is represented as an array of polylines normalized in [0, advance] x [0, 1.0].
+ */
+interface GlyphData {
+  advance: number;
+  strokes: [number, number][][];
+}
+
+const STICK_FONT: Record<string, GlyphData> = {
+  // Digits
+  "0": { advance: 0.6, strokes: [[[0.1, 0], [0.5, 0], [0.5, 1], [0.1, 1], [0.1, 0]], [[0.1, 0.1], [0.5, 0.9]]] },
+  "1": { advance: 0.45, strokes: [[[0.15, 0.75], [0.3, 1], [0.3, 0]], [[0.1, 0], [0.45, 0]]] },
+  "2": { advance: 0.6, strokes: [[[0.1, 0.8], [0.2, 1], [0.45, 1], [0.5, 0.8], [0.5, 0.6], [0.1, 0], [0.5, 0]]] },
+  "3": { advance: 0.6, strokes: [[[0.1, 0.9], [0.15, 1], [0.45, 1], [0.5, 0.8], [0.45, 0.55], [0.25, 0.55]], [[0.45, 0.55], [0.5, 0.3], [0.45, 0], [0.15, 0], [0.1, 0.1]]] },
+  "4": { advance: 0.6, strokes: [[[0.4, 0], [0.4, 1], [0.1, 0.35], [0.5, 0.35]]] },
+  "5": { advance: 0.6, strokes: [[[0.5, 1], [0.1, 1], [0.1, 0.55], [0.45, 0.55], [0.5, 0.3], [0.45, 0], [0.1, 0]]] },
+  "6": { advance: 0.6, strokes: [[[0.5, 0.9], [0.3, 1], [0.1, 0.7], [0.1, 0.2], [0.3, 0], [0.45, 0], [0.5, 0.2], [0.5, 0.45], [0.3, 0.55], [0.1, 0.55]]] },
+  "7": { advance: 0.6, strokes: [[[0.1, 1], [0.5, 1], [0.25, 0]], [[0.2, 0.5], [0.4, 0.5]]] },
+  "8": { advance: 0.6, strokes: [[[0.3, 0.55], [0.15, 0.65], [0.15, 0.9], [0.3, 1], [0.45, 1], [0.45, 0.65], [0.3, 0.55], [0.15, 0.45], [0.15, 0.1], [0.3, 0], [0.45, 0], [0.45, 0.45], [0.3, 0.55]]] },
+  "9": { advance: 0.6, strokes: [[[0.5, 0.45], [0.3, 0.55], [0.15, 0.55], [0.1, 0.75], [0.15, 1], [0.35, 1], [0.5, 0.8], [0.5, 0.3], [0.3, 0], [0.1, 0.1]]] },
+
+  // Basic Symbols
+  "#": { advance: 0.65, strokes: [[[0.22, 0.05], [0.22, 0.95]], [[0.45, 0.05], [0.45, 0.95]], [[0.08, 0.35], [0.58, 0.35]], [[0.08, 0.65], [0.58, 0.65]]] },
+  "-": { advance: 0.5, strokes: [[[0.1, 0.5], [0.4, 0.5]]] },
+  "_": { advance: 0.5, strokes: [[[0.05, 0], [0.45, 0]]] },
+  ".": { advance: 0.3, strokes: [[[0.12, 0], [0.18, 0], [0.18, 0.08], [0.12, 0.08], [0.12, 0]]] },
+  ":": { advance: 0.3, strokes: [[[0.12, 0.2], [0.18, 0.2]], [[0.12, 0.7], [0.18, 0.7]]] },
+  "/": { advance: 0.5, strokes: [[[0.1, 0], [0.4, 1]]] },
+  "+": { advance: 0.55, strokes: [[[0.1, 0.5], [0.45, 0.5]], [[0.275, 0.2], [0.275, 0.8]]] },
+  " ": { advance: 0.35, strokes: [] },
+
+  // Latin Alphabet (A-Z)
+  "A": { advance: 0.65, strokes: [[[0.1, 0], [0.32, 1], [0.55, 0]], [[0.18, 0.4], [0.47, 0.4]]] },
+  "B": { advance: 0.6, strokes: [[[0.1, 0], [0.1, 1], [0.4, 1], [0.48, 0.8], [0.4, 0.55], [0.1, 0.55]], [[0.4, 0.55], [0.5, 0.3], [0.4, 0], [0.1, 0]]] },
+  "C": { advance: 0.6, strokes: [[[0.5, 0.85], [0.4, 1], [0.2, 1], [0.1, 0.8], [0.1, 0.2], [0.2, 0], [0.4, 0], [0.5, 0.15]]] },
+  "D": { advance: 0.65, strokes: [[[0.1, 0], [0.1, 1], [0.38, 1], [0.52, 0.75], [0.52, 0.25], [0.38, 0], [0.1, 0]]] },
+  "E": { advance: 0.55, strokes: [[[0.45, 1], [0.1, 1], [0.1, 0], [0.45, 0]], [[0.1, 0.5], [0.38, 0.5]]] },
+  "F": { advance: 0.55, strokes: [[[0.1, 0], [0.1, 1], [0.45, 1]], [[0.1, 0.5], [0.35, 0.5]]] },
+  "G": { advance: 0.65, strokes: [[[0.5, 0.85], [0.4, 1], [0.2, 1], [0.1, 0.8], [0.1, 0.2], [0.2, 0], [0.45, 0], [0.52, 0.2], [0.52, 0.5], [0.32, 0.5]]] },
+  "H": { advance: 0.65, strokes: [[[0.1, 0], [0.1, 1]], [[0.5, 0], [0.5, 1]], [[0.1, 0.5], [0.5, 0.5]]] },
+  "I": { advance: 0.35, strokes: [[[0.08, 1], [0.28, 1]], [[0.18, 1], [0.18, 0]], [[0.08, 0], [0.28, 0]]] },
+  "J": { advance: 0.5, strokes: [[[0.1, 0.25], [0.18, 0], [0.35, 0], [0.4, 0.2], [0.4, 1], [0.25, 1]]] },
+  "K": { advance: 0.6, strokes: [[[0.1, 0], [0.1, 1]], [[0.5, 1], [0.1, 0.45], [0.5, 0]]] },
+  "L": { advance: 0.55, strokes: [[[0.1, 1], [0.1, 0], [0.45, 0]]] },
+  "M": { advance: 0.75, strokes: [[[0.1, 0], [0.1, 1], [0.375, 0.4], [0.65, 1], [0.65, 0]]] },
+  "N": { advance: 0.65, strokes: [[[0.1, 0], [0.1, 1], [0.5, 0], [0.5, 1]]] },
+  "O": { advance: 0.65, strokes: [[[0.1, 0.25], [0.1, 0.75], [0.25, 1], [0.42, 1], [0.52, 0.75], [0.52, 0.25], [0.42, 0], [0.25, 0], [0.1, 0.25]]] },
+  "P": { advance: 0.6, strokes: [[[0.1, 0], [0.1, 1], [0.4, 1], [0.48, 0.8], [0.4, 0.55], [0.1, 0.55]]] },
+  "Q": { advance: 0.65, strokes: [[[0.1, 0.25], [0.1, 0.75], [0.25, 1], [0.42, 1], [0.52, 0.75], [0.52, 0.25], [0.42, 0], [0.25, 0], [0.1, 0.25]], [[0.35, 0.25], [0.55, -0.05]]] },
+  "R": { advance: 0.6, strokes: [[[0.1, 0], [0.1, 1], [0.4, 1], [0.48, 0.8], [0.4, 0.55], [0.1, 0.55]], [[0.32, 0.55], [0.5, 0]]] },
+  "S": { advance: 0.6, strokes: [[[0.48, 0.85], [0.38, 1], [0.2, 1], [0.1, 0.8], [0.15, 0.6], [0.45, 0.45], [0.5, 0.2], [0.4, 0], [0.2, 0], [0.1, 0.15]]] },
+  "T": { advance: 0.6, strokes: [[[0.05, 1], [0.55, 1]], [[0.3, 1], [0.3, 0]]] },
+  "U": { advance: 0.65, strokes: [[[0.1, 1], [0.1, 0.25], [0.22, 0], [0.42, 0], [0.52, 0.25], [0.52, 1]]] },
+  "V": { advance: 0.6, strokes: [[[0.1, 1], [0.3, 0], [0.5, 1]]] },
+  "W": { advance: 0.8, strokes: [[[0.1, 1], [0.22, 0], [0.4, 0.6], [0.58, 0], [0.7, 1]]] },
+  "X": { advance: 0.6, strokes: [[[0.1, 1], [0.5, 0]], [[0.1, 0], [0.5, 1]]] },
+  "Y": { advance: 0.6, strokes: [[[0.1, 1], [0.3, 0.5], [0.5, 1]], [[0.3, 0.5], [0.3, 0]]] },
+  "Z": { advance: 0.6, strokes: [[[0.1, 1], [0.5, 1], [0.1, 0], [0.5, 0]], [[0.2, 0.5], [0.4, 0.5]]] },
+
+  // Ukrainian / Cyrillic specific glyphs
+  "Б": { advance: 0.6, strokes: [[[0.5, 1], [0.1, 1], [0.1, 0], [0.42, 0], [0.5, 0.22], [0.42, 0.5], [0.1, 0.5]]] },
+  "Г": { advance: 0.55, strokes: [[[0.1, 0], [0.1, 1], [0.48, 1]]] },
+  "Ґ": { advance: 0.55, strokes: [[[0.1, 0], [0.1, 1], [0.48, 1]], [[0.4, 1], [0.5, 1.15]]] },
+  "Д": { advance: 0.65, strokes: [[[0.08, 0.15], [0.08, 0], [0.08, 0.15], [0.52, 0.15], [0.52, 0]], [[0.14, 0.15], [0.24, 1], [0.38, 1], [0.46, 0.15]]] },
+  "Є": { advance: 0.6, strokes: [[[0.5, 0.85], [0.4, 1], [0.2, 1], [0.1, 0.8], [0.1, 0.2], [0.2, 0], [0.4, 0], [0.5, 0.15]], [[0.1, 0.5], [0.4, 0.5]]] },
+  "Ж": { advance: 0.75, strokes: [[[0.375, 1], [0.375, 0]], [[0.1, 1], [0.375, 0.5], [0.1, 0]], [[0.65, 1], [0.375, 0.5], [0.65, 0]], [[0.1, 0.5], [0.65, 0.5]]] },
+  "З": { advance: 0.55, strokes: [[[0.1, 0.9], [0.18, 1], [0.42, 1], [0.48, 0.8], [0.42, 0.55], [0.25, 0.55]], [[0.42, 0.55], [0.5, 0.3], [0.42, 0], [0.15, 0], [0.1, 0.1]]] },
+  "И": { advance: 0.65, strokes: [[[0.1, 0], [0.1, 1]], [[0.5, 0], [0.5, 1]], [[0.1, 0], [0.5, 1]]] },
+  "І": { advance: 0.35, strokes: [[[0.08, 1], [0.28, 1]], [[0.18, 1], [0.18, 0]], [[0.08, 0], [0.28, 0]]] },
+  "Ї": { advance: 0.35, strokes: [[[0.08, 1], [0.28, 1]], [[0.18, 1], [0.18, 0]], [[0.08, 0], [0.28, 0]], [[0.12, 1.15], [0.12, 1.2]], [[0.24, 1.15], [0.24, 1.2]]] },
+  "Й": { advance: 0.65, strokes: [[[0.1, 0], [0.1, 1]], [[0.5, 0], [0.5, 1]], [[0.1, 0], [0.5, 1]], [[0.2, 1.15], [0.3, 1.08], [0.4, 1.15]]] },
+  "Л": { advance: 0.6, strokes: [[[0.1, 0], [0.25, 1], [0.5, 1], [0.5, 0]]] },
+  "П": { advance: 0.6, strokes: [[[0.1, 0], [0.1, 1], [0.5, 1], [0.5, 0]]] },
+  "У": { advance: 0.6, strokes: [[[0.1, 1], [0.3, 0.45], [0.5, 1]], [[0.3, 0.45], [0.15, -0.15]]] },
+  "Ф": { advance: 0.7, strokes: [[[0.35, 1], [0.35, 0]], [[0.35, 0.8], [0.15, 0.8], [0.12, 0.55], [0.15, 0.3], [0.35, 0.3]], [[0.35, 0.8], [0.55, 0.8], [0.58, 0.55], [0.55, 0.3], [0.35, 0.3]]] },
+  "Ц": { advance: 0.65, strokes: [[[0.1, 1], [0.1, 0.12], [0.5, 0.12], [0.5, 1]], [[0.5, 0.12], [0.58, 0.12], [0.58, -0.05]]] },
+  "Ч": { advance: 0.6, strokes: [[[0.1, 1], [0.1, 0.6], [0.45, 0.6]], [[0.45, 1], [0.45, 0]]] },
+  "Ш": { advance: 0.75, strokes: [[[0.1, 1], [0.1, 0], [0.65, 0], [0.65, 1]], [[0.375, 0], [0.375, 1]]] },
+  "Щ": { advance: 0.8, strokes: [[[0.1, 1], [0.1, 0.1], [0.65, 0.1], [0.65, 1]], [[0.375, 0.1], [0.375, 1]], [[0.65, 0.1], [0.72, 0.1], [0.72, -0.05]]] },
+  "Ь": { advance: 0.55, strokes: [[[0.1, 0], [0.1, 1]], [[0.1, 0.55], [0.38, 0.55], [0.48, 0.35], [0.38, 0], [0.1, 0]]] },
+  "Ю": { advance: 0.75, strokes: [[[0.1, 0], [0.1, 1]], [[0.1, 0.5], [0.3, 0.5]], [[0.3, 0.25], [0.3, 0.75], [0.45, 1], [0.62, 0.75], [0.62, 0.25], [0.45, 0], [0.3, 0.25]]] },
+  "Я": { advance: 0.6, strokes: [[[0.48, 0], [0.48, 1], [0.2, 1], [0.12, 0.75], [0.2, 0.52], [0.48, 0.52]], [[0.28, 0.52], [0.12, 0]]] }
+};
+
+/**
+ * Generates single-stroke 2D polylines for engraving part text inside a polygon.
+ * Automatically fits inside maxBoundingRadius (e.g. triangle inradius).
+ */
+export function generateTextEngravingPaths(
+  text: string,
+  centerX: number,
+  centerY: number,
+  requestedHeight: number = 22,
+  maxBoundingRadius?: number
+): Array<Array<{ x: number; y: number }>> {
+  const cleanStr = (text || "").toUpperCase().trim();
+  if (!cleanStr) return [];
+
+  // Calculate total natural width in normalized font units
+  let totalAdvance = 0;
+  const glyphs: GlyphData[] = [];
+  const charSpacing = 0.12;
+
+  for (let i = 0; i < cleanStr.length; i++) {
+    const ch = cleanStr[i];
+    const g = STICK_FONT[ch] || STICK_FONT[ch.toUpperCase()] || {
+      advance: 0.5,
+      strokes: [[[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9], [0.1, 0.1]]]
+    };
+    glyphs.push(g);
+    totalAdvance += g.advance + (i < cleanStr.length - 1 ? charSpacing : 0);
+  }
+
+  // Determine effective scale based on bounding constraint
+  let effHeight = Math.max(10, requestedHeight);
+  if (maxBoundingRadius && maxBoundingRadius > 10) {
+    const textDiag = Math.hypot(totalAdvance * effHeight, effHeight);
+    const maxAllowedDiag = maxBoundingRadius * 1.5;
+    if (textDiag > maxAllowedDiag) {
+      effHeight = Math.max(8, (maxAllowedDiag / textDiag) * effHeight);
+    }
+  }
+
+  const textTotalWidth = totalAdvance * effHeight;
+  const startX = centerX - textTotalWidth / 2;
+  const startY = centerY - effHeight / 2;
+
+  const result: Array<Array<{ x: number; y: number }>> = [];
+  let currX = startX;
+
+  for (let i = 0; i < glyphs.length; i++) {
+    const g = glyphs[i];
+    for (const stroke of g.strokes) {
+      if (stroke.length < 2) continue;
+      const polyline: Array<{ x: number; y: number }> = [];
+      for (const pt of stroke) {
+        polyline.push({
+          x: currX + pt[0] * effHeight,
+          y: startY + pt[1] * effHeight
+        });
+      }
+      result.push(polyline);
+    }
+    currX += (g.advance + charSpacing) * effHeight;
+  }
+
+  return result;
 }
 
 /**
@@ -356,6 +517,145 @@ export function calculateDomeToolpath(
 
     const triangleSegments: ToolpathSegment[] = [];
 
+    // 0. Auto-Engraving Part ID and Type on face before cutting perimeter
+    let engraveLastWorldPos = lastWorldPos;
+    if (config.enableEngraving) {
+      const labelText = `#${face.id} ${face.type}`;
+      const cen2dX = (coords2D.pA.x + coords2D.pB.x + coords2D.pC.x) / 3;
+      const cen2dY = (coords2D.pA.y + coords2D.pB.y + coords2D.pC.y) / 3;
+      const faceInradius = Math.min(sideAB, sideBC, sideCA) * 0.288;
+
+      const uNorm = {
+        x: (baseVB.x - baseVA.x) / Math.max(0.1, sideAB),
+        y: (baseVB.y - baseVA.y) / Math.max(0.1, sideAB),
+        z: (baseVB.z - baseVA.z) / Math.max(0.1, sideAB)
+      };
+      const vNorm = {
+        x: entryNy * uNorm.z - entryNz * uNorm.y,
+        y: entryNz * uNorm.x - entryNx * uNorm.z,
+        z: entryNx * uNorm.y - entryNy * uNorm.x
+      };
+
+      const strokes = generateTextEngravingPaths(
+        labelText,
+        cen2dX,
+        cen2dY,
+        config.engravingTextHeightMm,
+        faceInradius * 0.75
+      );
+
+      strokes.forEach(stroke => {
+        if (stroke.length < 2) return;
+        const p0 = stroke[0];
+        const dx0 = p0.x - cen2dX;
+        const dy0 = p0.y - cen2dY;
+
+        const p0_3d = {
+          x: baseCen.x + uNorm.x * dx0 + vNorm.x * dy0 - entryNx * config.engravingDepthMm,
+          y: baseCen.y + uNorm.y * dx0 + vNorm.y * dy0 - entryNy * config.engravingDepthMm,
+          z: baseCen.z + uNorm.z * dx0 + vNorm.z * dy0 - entryNz * config.engravingDepthMm
+        };
+        const p0_safe3d = {
+          x: p0_3d.x + entryNx * (config.retractHeightMm + config.engravingDepthMm),
+          y: p0_3d.y + entryNy * (config.retractHeightMm + config.engravingDepthMm),
+          z: p0_3d.z + entryNz * (config.retractHeightMm + config.engravingDepthMm)
+        };
+        const localP0 = { x: p0.x, y: p0.y, z: -config.engravingDepthMm };
+        const localSafeP0 = { x: p0.x, y: p0.y, z: config.retractHeightMm };
+
+        // Rapid to above stroke start
+        const rSeg: ToolpathSegment = {
+          id: globalSegmentId++,
+          type: "rapid",
+          from: { ...engraveLastWorldPos },
+          to: p0_safe3d,
+          localFrom: { ...localSafeP0 },
+          localTo: localSafeP0,
+          feedrate: 6000,
+          faceId: face.id,
+          faceType: face.type,
+          passIndex: 0,
+          gcodeLine: `G0 X${p0.x.toFixed(3)} Y${p0.y.toFixed(3)} Z${config.retractHeightMm.toFixed(3)}`,
+          lengthMm: Math.hypot(p0_safe3d.x - engraveLastWorldPos.x, p0_safe3d.y - engraveLastWorldPos.y, p0_safe3d.z - engraveLastWorldPos.z)
+        };
+        triangleSegments.push(rSeg);
+
+        // Plunge to engraving depth
+        const plSeg: ToolpathSegment = {
+          id: globalSegmentId++,
+          type: "plunge",
+          from: p0_safe3d,
+          to: p0_3d,
+          localFrom: localSafeP0,
+          localTo: localP0,
+          feedrate: config.plungeFeedRateMmMin,
+          faceId: face.id,
+          faceType: face.type,
+          passIndex: 1,
+          gcodeLine: `G1 Z${(-config.engravingDepthMm).toFixed(3)} F${config.plungeFeedRateMmMin}`,
+          lengthMm: config.retractHeightMm + config.engravingDepthMm
+        };
+        triangleSegments.push(plSeg);
+
+        // Cut stroke segments
+        let prev3D = p0_3d;
+        let prevLocal = localP0;
+        for (let k = 1; k < stroke.length; k++) {
+          const pt = stroke[k];
+          const dx = pt.x - cen2dX;
+          const dy = pt.y - cen2dY;
+          const pt_3d = {
+            x: baseCen.x + uNorm.x * dx + vNorm.x * dy - entryNx * config.engravingDepthMm,
+            y: baseCen.y + uNorm.y * dx + vNorm.y * dy - entryNy * config.engravingDepthMm,
+            z: baseCen.z + uNorm.z * dx + vNorm.z * dy - entryNz * config.engravingDepthMm
+          };
+          const localPt = { x: pt.x, y: pt.y, z: -config.engravingDepthMm };
+          const segDist = Math.hypot(pt.x - stroke[k - 1].x, pt.y - stroke[k - 1].y);
+
+          const engSeg: ToolpathSegment = {
+            id: globalSegmentId++,
+            type: "engrave",
+            from: prev3D,
+            to: pt_3d,
+            localFrom: prevLocal,
+            localTo: localPt,
+            feedrate: config.engravingFeedRateMmMin,
+            faceId: face.id,
+            faceType: face.type,
+            passIndex: 1,
+            gcodeLine: `G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} F${config.engravingFeedRateMmMin}`,
+            lengthMm: segDist
+          };
+          triangleSegments.push(engSeg);
+          prev3D = pt_3d;
+          prevLocal = localPt;
+        }
+
+        // Retract to safe clearance
+        const ret3D = {
+          x: prev3D.x + entryNx * (config.retractHeightMm + config.engravingDepthMm),
+          y: prev3D.y + entryNy * (config.retractHeightMm + config.engravingDepthMm),
+          z: prev3D.z + entryNz * (config.retractHeightMm + config.engravingDepthMm)
+        };
+        const retSeg: ToolpathSegment = {
+          id: globalSegmentId++,
+          type: "retract",
+          from: prev3D,
+          to: ret3D,
+          localFrom: prevLocal,
+          localTo: { x: prevLocal.x, y: prevLocal.y, z: config.retractHeightMm },
+          feedrate: 6000,
+          faceId: face.id,
+          faceType: face.type,
+          passIndex: 1,
+          gcodeLine: `G0 Z${config.retractHeightMm.toFixed(3)}`,
+          lengthMm: config.retractHeightMm + config.engravingDepthMm
+        };
+        triangleSegments.push(retSeg);
+        engraveLastWorldPos = ret3D;
+      });
+    }
+
     // 1. Rapid move (G0) from previous position to Safe Height above start point
     const start3D = poly3D[0];
     const safeStart3D = {
@@ -371,15 +671,15 @@ export function calculateDomeToolpath(
     };
 
     const rapidDist = Math.hypot(
-      safeStart3D.x - lastWorldPos.x,
-      safeStart3D.y - lastWorldPos.y,
-      safeStart3D.z - lastWorldPos.z
+      safeStart3D.x - engraveLastWorldPos.x,
+      safeStart3D.y - engraveLastWorldPos.y,
+      safeStart3D.z - engraveLastWorldPos.z
     );
 
     const g0Seg: ToolpathSegment = {
       id: globalSegmentId++,
       type: "rapid",
-      from: { ...lastWorldPos },
+      from: { ...engraveLastWorldPos },
       to: safeStart3D,
       localFrom: { ...localSafeStart, z: config.safeHeightMm },
       localTo: localSafeStart,
@@ -606,12 +906,16 @@ export function calculateDomeToolpath(
     // Tally lengths and times for this triangle
     let tCutLen = 0;
     let tRapidLen = 0;
+    let tEngraveLen = 0;
     let tTime = 0;
 
     triangleSegments.forEach(s => {
       if (s.type === "cut" || s.type === "tab") {
         tCutLen += s.lengthMm;
         tTime += (s.lengthMm / s.feedrate) * 60;
+      } else if (s.type === "engrave") {
+        tEngraveLen += s.lengthMm;
+        tTime += (s.lengthMm / (s.feedrate || config.engravingFeedRateMmMin)) * 60;
       } else if (s.type === "plunge") {
         tCutLen += s.lengthMm;
         tTime += (s.lengthMm / s.feedrate) * 60;
@@ -627,9 +931,10 @@ export function calculateDomeToolpath(
       faceId: face.id,
       faceType: face.type,
       segments: triangleSegments,
-      totalLengthMm: tCutLen + tRapidLen,
+      totalLengthMm: tCutLen + tRapidLen + tEngraveLen,
       cutLengthMm: tCutLen,
       rapidLengthMm: tRapidLen,
+      engraveLengthMm: tEngraveLen,
       estimatedTimeSec: Math.round(tTime),
       gcode: triGCode
     });
@@ -640,11 +945,13 @@ export function calculateDomeToolpath(
   // Calculate totals
   let totalCutLenMm = 0;
   let totalRapidLenMm = 0;
+  let totalEngraveLenMm = 0;
   let totalTimeSec = 0;
 
   triangles.forEach(t => {
     totalCutLenMm += t.cutLengthMm;
     totalRapidLenMm += t.rapidLengthMm;
+    totalEngraveLenMm += t.engraveLengthMm;
     totalTimeSec += t.estimatedTimeSec;
   });
 
@@ -653,7 +960,8 @@ export function calculateDomeToolpath(
 
   const cutM = Math.round((totalCutLenMm / 1000) * 10) / 10;
   const rapidM = Math.round((totalRapidLenMm / 1000) * 10) / 10;
-  const totalM = Math.round((cutM + rapidM) * 10) / 10;
+  const engraveM = Math.round((totalEngraveLenMm / 1000) * 10) / 10;
+  const totalM = Math.round((cutM + rapidM + engraveM) * 10) / 10;
   const estMins = Math.round((totalTimeSec / 60) * 10) / 10;
 
   return {
@@ -669,7 +977,8 @@ export function calculateDomeToolpath(
       totalDistanceMeters: totalM,
       estimatedTimeMinutes: estMins,
       cutLengthMeters: cutM,
-      rapidLengthMeters: rapidM
+      rapidLengthMeters: rapidM,
+      engraveLengthMeters: engraveM
     }
   };
 }
@@ -733,6 +1042,7 @@ export function generateMach3GCode(
     `( CLEARANCE HEIGHT: ${config.safeHeightMm.toFixed(1)}mm | RETRACT: ${config.retractHeightMm.toFixed(1)}mm            )`,
     `( FEEDRATE: ${config.feedRateMmMin} mm/min | PLUNGE: ${config.plungeFeedRateMmMin} mm/min | RPM: ${config.spindleRpm}  )`,
     `( HOLDING TABS: ${config.holdingTabs ? `ENABLED (W=${config.tabWidthMm}mm, H=${config.tabHeightMm}mm)` : "DISABLED"}`.padEnd(65) + `)`,
+    `( AUTO-ENGRAVING IDs: ${config.enableEngraving ? `ENABLED (DEPTH: ${config.engravingDepthMm.toFixed(2)}mm, H=${config.engravingTextHeightMm}mm, F=${config.engravingFeedRateMmMin})` : "DISABLED"}`.padEnd(65) + `)`,
     `(================================================================)`,
     ``,
     `(--- SAFETY BLOCK & INITIALIZATION ---)`,
@@ -762,6 +1072,8 @@ export function generateMach3GCode(
         lines.push(`G1 Z${seg.localTo.z.toFixed(3)} F${seg.feedrate} (Plunge into stock, Pass ${seg.passIndex})`);
       } else if (seg.type === "cut") {
         lines.push(`G1 X${seg.localTo.x.toFixed(3)} Y${seg.localTo.y.toFixed(3)} F${seg.feedrate}`);
+      } else if (seg.type === "engrave") {
+        lines.push(`G1 X${seg.localTo.x.toFixed(3)} Y${seg.localTo.y.toFixed(3)} F${seg.feedrate} (Engrave part ID stroke)`);
       } else if (seg.type === "tab") {
         lines.push(`(--- Holding Tab Bridge ---)`);
         lines.push(seg.gcodeLine);
@@ -829,6 +1141,7 @@ export function generateSheetMach3GCode(
     `( CLEARANCE HEIGHT: ${config.safeHeightMm.toFixed(1)}mm | RETRACT: ${config.retractHeightMm.toFixed(1)}mm            )`,
     `( FEEDRATE: ${config.feedRateMmMin} mm/min | PLUNGE: ${config.plungeFeedRateMmMin} mm/min | RPM: ${config.spindleRpm}  )`,
     `( HOLDING TABS: ${config.holdingTabs ? `ENABLED (W=${config.tabWidthMm}mm, H=${config.tabHeightMm}mm)` : "DISABLED"}`.padEnd(65) + `)`,
+    `( AUTO-ENGRAVING IDs: ${config.enableEngraving ? `ENABLED (DEPTH: ${config.engravingDepthMm.toFixed(2)}mm, H=${config.engravingTextHeightMm}mm, F=${config.engravingFeedRateMmMin})` : "DISABLED"}`.padEnd(65) + `)`,
     `( WORK ZERO: X0 Y0 AT BOTTOM-LEFT OF SHEET, Z0 AT TOP SURFACE  )`,
     `(================================================================)`,
     ``,
@@ -859,6 +1172,8 @@ export function generateSheetMach3GCode(
         lines.push(`G1 Z${seg.localTo.z.toFixed(3)} F${seg.feedrate} (Plunge into stock, Pass ${seg.passIndex})`);
       } else if (seg.type === "cut") {
         lines.push(`G1 X${seg.localTo.x.toFixed(3)} Y${seg.localTo.y.toFixed(3)} F${seg.feedrate}`);
+      } else if (seg.type === "engrave") {
+        lines.push(`G1 X${seg.localTo.x.toFixed(3)} Y${seg.localTo.y.toFixed(3)} F${seg.feedrate} (Engrave part ID stroke)`);
       } else if (seg.type === "tab") {
         lines.push(`(--- Holding Tab Bridge ---)`);
         lines.push(seg.gcodeLine);
@@ -945,6 +1260,134 @@ export function calculateSheetToolpath(
     const vertCount = offsetPoly.length;
 
     const panelSegments: ToolpathSegment[] = [];
+
+    // 0. Auto-Engraving Part ID and Type on nested sheet panel before perimeter cutout
+    if (config.enableEngraving) {
+      const panelLabel = `#${panel.panelId} ${panel.panelType}`;
+      let pCenX = 0;
+      let pCenY = 0;
+      const polyLen = panel.polygon.length;
+      for (let i = 0; i < polyLen; i++) {
+        pCenX += panel.polygon[i][0];
+        pCenY += panel.polygon[i][1];
+      }
+      pCenX /= polyLen;
+      pCenY /= polyLen;
+
+      // Calculate perimeter and area for inradius estimation
+      let polyPerim = 0;
+      for (let i = 0; i < polyLen; i++) {
+        const next = (i + 1) % polyLen;
+        polyPerim += Math.hypot(
+          panel.polygon[next][0] - panel.polygon[i][0],
+          panel.polygon[next][1] - panel.polygon[i][1]
+        );
+      }
+      let area2 = 0;
+      for (let i = 0; i < polyLen; i++) {
+        const next = (i + 1) % polyLen;
+        area2 += panel.polygon[i][0] * panel.polygon[next][1] - panel.polygon[next][0] * panel.polygon[i][1];
+      }
+      const polyInradius = Math.abs(area2) / Math.max(1, polyPerim);
+
+      const engraveStrokes = generateTextEngravingPaths(
+        panelLabel,
+        pCenX,
+        pCenY,
+        config.engravingTextHeightMm,
+        polyInradius * 0.75
+      );
+
+      engraveStrokes.forEach(stroke => {
+        if (stroke.length < 2) return;
+        const p0 = stroke[0];
+        const p0_3D = to3D(p0, -config.engravingDepthMm);
+        const p0_safe3D = to3D(p0, config.retractHeightMm);
+        const localP0 = { x: p0.x, y: p0.y, z: -config.engravingDepthMm };
+        const localSafeP0 = { x: p0.x, y: p0.y, z: config.retractHeightMm };
+
+        // Rapid to above stroke start
+        const rapidSeg: ToolpathSegment = {
+          id: globalSegmentId++,
+          type: "rapid",
+          from: lastPos,
+          to: p0_safe3D,
+          localFrom: { x: lastPos.x + sheetW / 2, y: lastPos.y + sheetH / 2, z: lastPos.z },
+          localTo: localSafeP0,
+          feedrate: 6000,
+          faceId: panel.panelId,
+          faceType: panel.panelType,
+          passIndex: 0,
+          gcodeLine: `G0 X${p0.x.toFixed(3)} Y${p0.y.toFixed(3)} Z${config.retractHeightMm.toFixed(3)}`,
+          lengthMm: Math.hypot(p0_safe3D.x - lastPos.x, p0_safe3D.y - lastPos.y, p0_safe3D.z - lastPos.z)
+        };
+        panelSegments.push(rapidSeg);
+
+        // Plunge to engraving depth
+        const plungeSeg: ToolpathSegment = {
+          id: globalSegmentId++,
+          type: "plunge",
+          from: p0_safe3D,
+          to: p0_3D,
+          localFrom: localSafeP0,
+          localTo: localP0,
+          feedrate: config.plungeFeedRateMmMin,
+          faceId: panel.panelId,
+          faceType: panel.panelType,
+          passIndex: 1,
+          gcodeLine: `G1 Z${(-config.engravingDepthMm).toFixed(3)} F${config.plungeFeedRateMmMin}`,
+          lengthMm: config.retractHeightMm + config.engravingDepthMm
+        };
+        panelSegments.push(plungeSeg);
+
+        // Engraving line segments
+        let prevPt3D = p0_3D;
+        let prevLocal = localP0;
+        for (let k = 1; k < stroke.length; k++) {
+          const pt = stroke[k];
+          const pt3D = to3D(pt, -config.engravingDepthMm);
+          const localPt = { x: pt.x, y: pt.y, z: -config.engravingDepthMm };
+          const dLen = Math.hypot(pt.x - stroke[k - 1].x, pt.y - stroke[k - 1].y);
+
+          const engSeg: ToolpathSegment = {
+            id: globalSegmentId++,
+            type: "engrave",
+            from: prevPt3D,
+            to: pt3D,
+            localFrom: prevLocal,
+            localTo: localPt,
+            feedrate: config.engravingFeedRateMmMin,
+            faceId: panel.panelId,
+            faceType: panel.panelType,
+            passIndex: 1,
+            gcodeLine: `G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} F${config.engravingFeedRateMmMin}`,
+            lengthMm: dLen
+          };
+          panelSegments.push(engSeg);
+          prevPt3D = pt3D;
+          prevLocal = localPt;
+        }
+
+        // Retract to retract height after stroke
+        const retAfter3D = to3D(stroke[stroke.length - 1], config.retractHeightMm);
+        const retSeg: ToolpathSegment = {
+          id: globalSegmentId++,
+          type: "retract",
+          from: prevPt3D,
+          to: retAfter3D,
+          localFrom: prevLocal,
+          localTo: { x: prevLocal.x, y: prevLocal.y, z: config.retractHeightMm },
+          feedrate: 6000,
+          faceId: panel.panelId,
+          faceType: panel.panelType,
+          passIndex: 1,
+          gcodeLine: `G0 Z${config.retractHeightMm.toFixed(3)}`,
+          lengthMm: config.retractHeightMm + config.engravingDepthMm
+        };
+        panelSegments.push(retSeg);
+        lastPos = retAfter3D;
+      });
+    }
 
     // Local 2D start point (workpiece coordinates, X0 Y0 at bottom-left of sheet)
     const start2D = { x: offsetPoly[0][0], y: offsetPoly[0][1] };
@@ -1148,12 +1591,16 @@ export function calculateSheetToolpath(
     // Tally stats
     let tCutLen = 0;
     let tRapidLen = 0;
+    let tEngraveLen = 0;
     let tTime = 0;
 
     panelSegments.forEach(s => {
       if (s.type === "cut" || s.type === "tab" || s.type === "plunge") {
         tCutLen += s.lengthMm;
         tTime += (s.lengthMm / (s.feedrate || config.feedRateMmMin)) * 60;
+      } else if (s.type === "engrave") {
+        tEngraveLen += s.lengthMm;
+        tTime += (s.lengthMm / (s.feedrate || config.engravingFeedRateMmMin)) * 60;
       } else {
         tRapidLen += s.lengthMm;
         tTime += (s.lengthMm / (s.feedrate || 6000)) * 60;
@@ -1166,9 +1613,10 @@ export function calculateSheetToolpath(
       faceId: panel.panelId,
       faceType: panel.panelType,
       segments: panelSegments,
-      totalLengthMm: tCutLen + tRapidLen,
+      totalLengthMm: tCutLen + tRapidLen + tEngraveLen,
       cutLengthMm: tCutLen,
       rapidLengthMm: tRapidLen,
+      engraveLengthMm: tEngraveLen,
       estimatedTimeSec: Math.round(tTime),
       gcode: triGCode
     });
@@ -1179,11 +1627,13 @@ export function calculateSheetToolpath(
   // Calculate totals
   let totalCutLenMm = 0;
   let totalRapidLenMm = 0;
+  let totalEngraveLenMm = 0;
   let totalTimeSec = 0;
 
   triangles.forEach(t => {
     totalCutLenMm += t.cutLengthMm;
     totalRapidLenMm += t.rapidLengthMm;
+    totalEngraveLenMm += t.engraveLengthMm;
     totalTimeSec += t.estimatedTimeSec;
   });
 
@@ -1199,7 +1649,8 @@ export function calculateSheetToolpath(
 
   const cutM = Math.round((totalCutLenMm / 1000) * 10) / 10;
   const rapidM = Math.round((totalRapidLenMm / 1000) * 10) / 10;
-  const totalM = Math.round((cutM + rapidM) * 10) / 10;
+  const engraveM = Math.round((totalEngraveLenMm / 1000) * 10) / 10;
+  const totalM = Math.round((cutM + rapidM + engraveM) * 10) / 10;
   const estMins = Math.round((totalTimeSec / 60) * 10) / 10;
 
   return {
@@ -1221,7 +1672,8 @@ export function calculateSheetToolpath(
       totalDistanceMeters: totalM,
       estimatedTimeMinutes: estMins,
       cutLengthMeters: cutM,
-      rapidLengthMeters: rapidM
+      rapidLengthMeters: rapidM,
+      engraveLengthMeters: engraveM
     }
   };
 }
