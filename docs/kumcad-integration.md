@@ -153,3 +153,30 @@ The STEP export has been re-imported with CadQuery/OpenCASCADE, **not with
 KumCAD itself**. A native KumCAD desktop import test remains outstanding.
 The workflow is configured to cover `main` after this CI configuration is
 merged; current verification is on a branch descended from `main`.
+
+
+## Phase 5 — native KumCAD STEP import validation
+
+The `feat/kumcad-native-step-smoke` branch adds an isolated test harness at
+`tools/kumcad_native/` and workflow `.github/workflows/kumcad-native.yml`.
+
+- KumCAD source pinned to commit `49598b6f30a8d0af309381663f55b14405d738d7`.
+- KumCAD's real `lcad::readStep()` is linked into an executable, not duplicated.
+- GeoHome test fixtures are produced using the existing CadQuery bridge.
+- The native reader imports both STEP files, checks non-null shapes, positive
+  volume and the number of solids.
+- CI runs on Ubuntu with Qt6/OCCT development packages. A temporary OCCT
+  toolkit-name compatibility shim is used for Ubuntu's older OCCT 7.6;
+  no upstream KumCAD source is patched.
+
+Verified CI: https://github.com/DenisDemenko/geohome/actions/runs/40853772835
+
+| Fixture | Solids | Total volume (mm^3) |
+| --- | ---: | ---: |
+| Beams | 3 | 1016640 |
+| Connectors | 3 | 177900 |
+
+This is source-level/native-library interoperability, **not** a Windows GUI
+test or a persistent synchronization channel. The proposed next stage is
+an opt-in Windows local companion that imports user-selected STEP files in
+KumCAD and reports status; that requires explicit app/IPC integration.

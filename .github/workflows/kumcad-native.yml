@@ -1,0 +1,50 @@
+name: Native KumCAD STEP interoperability
+
+on:
+  push:
+    branches:
+      - feat/kumcad-native-step-smoke
+    paths:
+      - "tools/kumcad_native/**"
+      - ".github/workflows/kumcad-native.yml"
+  workflow_dispatch:
+
+jobs:
+  native-step:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned KumCAD
+        uses: actions/checkout@v4
+        with:
+          repository: todorw/KumCAD
+          ref: 49598b6f30a8d0af309381663f55b14405d738d7
+          path: upstream/kumcad
+          persist-credentials: false
+      - name: Install Qt 6 and OpenCASCADE development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtbb-dev libfontconfig-dev cmake ninja-build g++ qt6-base-dev libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev libocct-data-exchange-dev libocct-visualization-dev libocct-ocaf-dev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test geometry generator
+        run: python -m pip install cadquery
+      - name: Generate GeoHome STEP fixtures
+        run: |
+          python tools/occt_bridge/geohome_to_step.py tools/occt_bridge/fixtures/triangle.json /tmp/geohome-beams.step --connectors-step /tmp/geohome-connectors.step
+      - name: Adapt OCCT 7.6 toolkit names for KumCAD 7.8-style linkage
+        run: |
+          mkdir -p /tmp/occt-shims
+          ln -s /usr/lib/x86_64-linux-gnu/libTKSTEP.so /tmp/occt-shims/libTKDESTEP.so
+          ln -s /usr/lib/x86_64-linux-gnu/libTKIGES.so /tmp/occt-shims/libTKDEIGES.so
+          ln -s /usr/lib/x86_64-linux-gnu/libTKSTL.so /tmp/occt-shims/libTKDESTL.so
+      - name: Configure native KumCAD compatibility executable
+        run: cmake -S tools/kumcad_native -B /tmp/geohome-kumcad-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKUMCAD_ROOT="${{ github.workspace }}/upstream/kumcad"
+      - name: Compile native KumCAD core and importer
+        run: cmake --build /tmp/geohome-kumcad-build --target geohome_kumcad_step_smoke -j 2
+      - name: Import GeoHome STEP with KumCAD readStep
+        run: /tmp/geohome-kumcad-build/geohome_kumcad_step_smoke /tmp/geohome-beams.step /tmp/geohome-connectors.step
