@@ -98,6 +98,61 @@ def _beam_solid(cq, start, delta, length_mm: float, profile: dict):
     return cq.Workplane(plane).rect(dimension, other).extrude(length_mm).val()
 
 
+
+def _trim_beam_ends(cq, solid, start, delta, length_mm: float, edge: dict,
+                    profile: dict):
+    """Clip a beam at two defined local cutting planes.
+
+    Convention: local X is the beam miter direction and local Y is the bevel
+    direction. Positive miter/bevel tilt the inward cut-plane normal toward
+    +X/+Y at both ends. Actual production orientation still requires a
+    connector-specific frame and engineering verification.
+    """
+    miter_a = float(edge.get("startMiterDeg") or 0)
+    miter_b = float(edge.get("endMiterDeg") or 0)
+    bevel = float(edge.get("bevelDeg") or 0)
+    for name, value in (("start miter", miter_a), ("end miter", miter_b), ("bevel", bevel)):
+        if not math.isfinite(value) or not 0 <= value < 80:
+            raise ValueError(f"{name} must be from 0 to under 80 degrees")
+
+    cut_length = edge.get("cutLengthMm")
+    setback = edge.get("hubSetbackMm")
+    if cut_length is not None:
+        _positive(cut_length, "cut length")
+        if cut_length > length_mm + 1e-3:
+            raise ValueError("Cut length cannot exceed centerline length")
+        inset = (length_mm - cut_length) / 2
+    else:
+        inset = 0 if setback is None else float(setback)
+        if not math.isfinite(inset) or inset < 0:
+            raise ValueError("Invalid hub setback")
+    if 2 * inset >= length_mm:
+        raise ValueError("Hub setbacks leave no usable beam")
+
+    direction = delta.normalized()
+    up = cq.Vector(0, 0, 1)
+    reference = cq.Vector(0, 1, 0) if abs(direction.dot(up)) > 0.95 else up
+    x_axis = reference.cross(direction).normalized()
+    y_axis = direction.cross(x_axis).normalized()
+    extent = 4 * (length_mm + profile["width"] + profile["depth"] + profile["diameter"] + 10)
+
+    for sign, origin, miter in (
+        (1, start + direction.multiply(inset), miter_a),
+        (-1, start + direction.multiply(length_mm - inset), miter_b),
+    ):
+        m = math.radians(miter)
+        b = math.radians(bevel)
+        inward = (direction.multiply(sign * math.cos(m) * math.cos(b))
+                  + x_axis.multiply(math.sin(m) * math.cos(b))
+                  + y_axis.multiply(math.sin(b))).normalized()
+        plane = cq.Plane(origin=origin, normal=inward)
+        halfspace = cq.Workplane(plane).rect(extent, extent).extrude(extent).val()
+        solid = solid.intersect(halfspace)
+        if solid.Volume() <= 1e-6 or not solid.isValid():
+            raise ValueError(f"Cut planes eliminated or invalidated beam {edge.get('id')}")
+    return solid
+
+
 def build_step(data: dict, output: Path, diameter_mm: float = 20.0,
                profile_type: str | None = None, width_mm: float | None = None,
                depth_mm: float | None = None, wall_mm: float | None = None) -> int:
@@ -116,7 +171,8 @@ def build_step(data: dict, output: Path, diameter_mm: float = 20.0,
         actual_length = delta.Length
         if not math.isfinite(actual_length) or actual_length <= 0.001:
             raise ValueError(f"Strut {edge.get('id')} has zero or invalid length")
-        solids.append(_beam_solid(cq, start, delta, actual_length, profile))
+        solid = _beam_solid(cq, start, delta, actual_length, profile)
+        solids.append(_trim_beam_ends(cq, solid, start, delta, actual_length, edge, profile))
     if not solids:
         raise ValueError("No struts to export")
     model = cq.Compound.makeCompound(solids)
