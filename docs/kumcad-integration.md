@@ -99,3 +99,26 @@ GeoHome's embedded section type and dimensions take precedence.
 individual connector bodies, solid naming in assemblies, material metadata,
 or a direct KumCAD runtime connection. Resulting CAD is suitable for
 interchange/visual checks, not yet for manufacturing.
+
+
+## Phase 3.2 — end-cut planes (experimental)
+
+The interchange carries optional per-strut `startMiterDeg`, `endMiterDeg`,
+`bevelDeg` and `hubSetbackMm`, plus the existing `cutLengthMm`. The
+OpenCASCADE bridge intersects each beam with a pair of oriented half-spaces:
+
+- `cutLengthMm` sets a centered net beam length (equal setback at both ends).
+- Otherwise `hubSetbackMm` is applied symmetrically when present.
+- Positive miter tilts the inward cutting normal toward the stable local X;
+  positive bevel tilts it toward the local Y.
+- Absent angles default to 0 degrees. Cut angles must be less than 80 degrees.
+
+Automated tests assert exact straight-cut length, valid angled-cut solids,
+invalid cut-length rejection, STEP export/re-import and web build/test success.
+
+**Engineering limitation:** GeoHome's currently computed miter/bevel values are
+approximate and do not encode a connector-specific local angular reference.
+Therefore this is geometric cut-plane support, not verified fabrication
+instructions. Before CNC manufacturing, define the local frame for each node,
+calculate exact face/connector intersections, validate material allowances, and
+run physical calibration tests.
