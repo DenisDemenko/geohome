@@ -47,4 +47,6 @@ jobs:
         run: |
           test -s /tmp/geohome-smoke.step
           python -c "from pathlib import Path; p=Path('/tmp/geohome-smoke.step'); assert 'ISO-10303-21' in p.read_text(errors='replace')[:200]"
+      - name: Validate beam profiles and STEP roundtrips
+        run: python -m unittest discover -s tools/occt_bridge -p "test_*.py" -v
 
